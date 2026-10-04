@@ -81,3 +81,16 @@ func TestOpenAPIMatchesRegistry(t *testing.T) {
 	api.Handler(r, api.Options{}).ServeHTTP(w, httptest.NewRequest(http.MethodGet, "/openapi.json", nil))
 	toolkittest.CheckOpenAPI(t, r, w.Body.Bytes())
 }
+
+func TestUnknownRouteIsJSON(t *testing.T) {
+	for _, req := range []*http.Request{
+		httptest.NewRequest(http.MethodGet, "/nope", nil),
+		httptest.NewRequest(http.MethodGet, "/ops/thing.make", nil),
+	} {
+		w := httptest.NewRecorder()
+		api.Handler(registry(), api.Options{}).ServeHTTP(w, req)
+		if w.Code != 404 || toolkittest.ErrorCode(w.Body.Bytes()) != "unknown_route" {
+			t.Errorf("%s %s: %d %s", req.Method, req.URL, w.Code, w.Body)
+		}
+	}
+}

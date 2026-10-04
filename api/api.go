@@ -67,6 +67,9 @@ func Handler(reg *op.Registry, opts Options) http.Handler {
 		}
 		writeJSON(w, http.StatusOK, out)
 	})
+	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
+		WriteError(w, op.Errorf(op.KindNotFound, "unknown_route", "no route %s %s", r.Method, r.URL.Path))
+	})
 	return mux
 }
 
