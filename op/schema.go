@@ -11,11 +11,25 @@ import (
 	"github.com/google/jsonschema-go/jsonschema"
 )
 
+// anyJSON returns the schema of an output that may be any JSON value. It
+// lists every JSON type rather than being the empty schema, which
+// jsonschema-go encodes as the boolean true and toolkit.metadata.v1 rejects.
+func anyJSON() *jsonschema.Schema {
+	return &jsonschema.Schema{Types: []string{"object", "array", "string", "number", "boolean", "null"}}
+}
+
 // schemaFor infers the JSON Schema of t, copies kong help tags into property
 // descriptions and kong default tags into defaults, and drops fields with a
 // default from required (a missing value takes the default on every surface).
+// An interface type such as any, and json.RawMessage at any depth, get
+// anyJSON.
 func schemaFor(t reflect.Type) (*jsonschema.Schema, error) {
-	s, err := jsonschema.ForType(t, &jsonschema.ForOptions{})
+	if t.Kind() == reflect.Interface {
+		return anyJSON(), nil
+	}
+	s, err := jsonschema.ForType(t, &jsonschema.ForOptions{
+		TypeSchemas: map[reflect.Type]*jsonschema.Schema{reflect.TypeFor[json.RawMessage](): anyJSON()},
+	})
 	if err != nil {
 		return nil, err
 	}

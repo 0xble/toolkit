@@ -51,6 +51,14 @@ field is declared once.
   `tool notes list --limit 5` are the same call.
 - **Output.** `--json` or `--agent` prints JSON. Otherwise the CLI uses the
   operation's `Render` hook if it has one, and JSON if not.
+- **Any JSON output.** An operation whose output is `any` or
+  `json.RawMessage` (a raw API passthrough, say) may return any JSON value.
+  Its output schema lists every JSON type,
+  `{"type": ["object", "array", "string", "number", "boolean", "null"]}`, and
+  a `json.RawMessage` field gets the same schema at any depth. HTTP returns
+  the value as the body. MCP structured content must be an object, so such a
+  tool has no `outputSchema` and its result is the JSON text alone. An output
+  of `map[string]any` is always an object and keeps structured content.
 - **Errors.** Handlers return `*op.Error` with a kind. The kind maps to the
   exit code, the HTTP status and an MCP `isError` result, each carrying the
   same `{code, message, suggestions}` payload. An error may carry the output

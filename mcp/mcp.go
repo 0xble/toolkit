@@ -51,7 +51,9 @@ func NewServer(reg *op.Registry, auth op.Authorizer, httpReq *http.Request) *sdk
 }
 
 // Tool is the MCP tool definition of e. The output schema is set only when
-// the output is a JSON object, as MCP requires.
+// the output is always a JSON object, as MCP requires. Any other output,
+// including an op.Op whose Out is any or json.RawMessage, has no output
+// schema, and its result is the JSON text alone, without structured content.
 func Tool(e *op.Entry) *sdk.Tool {
 	destructive := e.Effect == op.Destructive
 	t := &sdk.Tool{
@@ -75,7 +77,8 @@ func result(e *op.Entry, out any) (*sdk.CallToolResult, error) {
 		return errorResult(op.Errorf(op.KindError, "encode_failed", "encode output: %v", err)), nil
 	}
 	r := &sdk.CallToolResult{Content: []sdk.Content{&sdk.TextContent{Text: string(b)}}}
-	if e.OutputSchema().Type == "object" {
+	// A nil map encodes as null, which is not structured content.
+	if e.OutputSchema().Type == "object" && len(b) > 0 && b[0] == '{' {
 		r.StructuredContent = json.RawMessage(b)
 	}
 	return r, nil

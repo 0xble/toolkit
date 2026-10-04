@@ -66,3 +66,56 @@ func TestErrorResultInIsErrorText(t *testing.T) {
 		t.Errorf("obj_fix: %+v %v", res, err)
 	}
 }
+
+// TestAnyJSONOutputIsTextOnly checks that an output that may be any JSON
+// value has no output schema and comes back as text without structured
+// content, and that a nil map does not become null structured content.
+func TestAnyJSONOutputIsTextOnly(t *testing.T) {
+	r := op.New("t", "v")
+	add := func(name string, f func() (any, error)) {
+		op.Add(r, op.Op[empty, any]{Name: name, Effect: op.Read, MCP: true,
+			Handler: func(context.Context, op.Request, empty) (any, error) { return f() }})
+	}
+	add("arr", func() (any, error) { return []any{1, "x"}, nil })
+	add("str", func() (any, error) { return "s", nil })
+	add("null", func() (any, error) { return nil, nil })
+	add("obj", func() (any, error) { return map[string]any{"a": 1}, nil })
+	op.Add(r, op.Op[empty, json.RawMessage]{Name: "raw", Effect: op.Read, MCP: true,
+		Handler: func(context.Context, op.Request, empty) (json.RawMessage, error) {
+			return json.RawMessage(`[true]`), nil
+		}})
+	op.Add(r, op.Op[empty, map[string]any]{Name: "nilmap", Effect: op.Read, MCP: true,
+		Handler: func(context.Context, op.Request, empty) (map[string]any, error) { return nil, nil }})
+	op.Add(r, op.Op[empty, map[string]any]{Name: "map", Effect: op.Read, MCP: true,
+		Handler: func(context.Context, op.Request, empty) (map[string]any, error) { return map[string]any{"k": "v"}, nil }})
+
+	for _, name := range []string{"arr", "str", "null", "obj", "raw"} {
+		if mcp.Tool(r.Lookup(name)).OutputSchema != nil {
+			t.Errorf("%s: an any output must have no MCP output schema", name)
+		}
+	}
+	if mcp.Tool(r.Lookup("map")).OutputSchema == nil {
+		t.Error("map[string]any must keep its object output schema")
+	}
+	cs := toolkittest.MCPClient(t, r, nil)
+	tools, err := cs.ListTools(context.Background(), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	toolkittest.CheckMCPTools(t, r, tools.Tools)
+	for name, want := range map[string]string{
+		"arr": `[1,"x"]`, "str": `"s"`, "null": `null`, "obj": `{"a":1}`, "raw": `[true]`, "nilmap": `null`, "map": `{"k":"v"}`,
+	} {
+		res, err := cs.CallTool(context.Background(), &sdk.CallToolParams{Name: name, Arguments: map[string]any{}})
+		if err != nil || res.IsError {
+			t.Errorf("%s: %+v %v", name, res, err)
+			continue
+		}
+		if got := res.Content[0].(*sdk.TextContent).Text; got != want {
+			t.Errorf("%s: text %s, want %s", name, got, want)
+		}
+		if structured := res.StructuredContent != nil; structured != (name == "map") {
+			t.Errorf("%s: structured content %v", name, res.StructuredContent)
+		}
+	}
+}

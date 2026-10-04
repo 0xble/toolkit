@@ -58,9 +58,11 @@ type Request struct {
 	HTTP *http.Request
 }
 
-// Op declares one operation. In and Out are structs (Out may be any JSON
-// value type). Input field tags carry both the wire shape (json) and the CLI
-// shape (kong: arg, name, short, help, default).
+// Op declares one operation. In is a struct. Out is usually a struct but may
+// be any type that encodes to JSON: any and json.RawMessage declare an output
+// that may be any JSON value, and map[string]any any JSON object. Input field
+// tags carry both the wire shape (json) and the CLI shape (kong: arg, name,
+// short, help, default).
 type Op[In, Out any] struct {
 	// Name is the canonical dotted name, e.g. "note.delete".
 	Name string
@@ -216,7 +218,8 @@ func newEntry[In, Out any](r *Registry, o Op[In, Out]) (*Entry, error) {
 	if o.Render != nil {
 		e.render = func(w io.Writer, out any) error {
 			v, ok := out.(Out)
-			if !ok {
+			// A nil output is the zero value of an interface Out such as any.
+			if !ok && (out != nil || e.Out.Kind() != reflect.Interface) {
 				return fmt.Errorf("op %s: output is %T, want %s", o.Name, out, e.Out)
 			}
 			return o.Render(w, v)
