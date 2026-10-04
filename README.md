@@ -190,7 +190,8 @@ requires.
 Without `ci-image-dir`, `bin/ci` runs on the runner after `actions/setup-go`.
 With it, `bin/ci` runs inside an image built from that directory. A pull
 request builds the base SHA's copy, never its own, so a Dockerfile change takes
-effect once it lands. The image is tagged with the directory's Git tree SHA. On
+effect once it lands, and the directory must land before a caller sets
+`ci-image-dir`. The image is tagged with the directory's Git tree SHA. On
 Namespace runners it is pulled from the workspace registry and built only on a
 miss, and a push to the default branch publishes it. toolkit's own gate and
 nightly call these workflows by local path, with `ci-image-dir: ci`.
