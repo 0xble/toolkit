@@ -1,0 +1,226 @@
+name: gate
+on:
+  pull_request:
+    types: [opened, synchronize, reopened, ready_for_review]
+  # PRs use base ci/. Exercise reviewed image/workflow changes after landing.
+  push:
+    branches: [main]
+permissions:
+  contents: read
+concurrency:
+  group: gate-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+jobs:
+  gate:
+    if: ${{ !github.event.pull_request.draft }}
+    runs-on: ${{ vars.CI_RUNNER || 'ubuntu-24.04' }}
+    timeout-minutes: 30
+    env:
+      # The shared daemon must not confuse images from concurrent repositories.
+      CI_IMAGE: ci-${{ github.run_id }}-${{ github.run_attempt }}
+    steps:
+      - name: Resolve the exact candidate SHA
+        id: candidate
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          PR_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          PUSH_SHA: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          if [ "$EVENT_NAME" = pull_request ]; then sha="$PR_HEAD_SHA"; else sha="$PUSH_SHA"; fi
+          printf '%s' "$sha" | grep -Eq '^[0-9a-f]{40}$'
+          echo "sha=$sha" >> "$GITHUB_OUTPUT"
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          ref: ${{ steps.candidate.outputs.sha }}
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Confirm the checkout is the exact candidate
+        env:
+          EXPECTED_SHA: ${{ steps.candidate.outputs.sha }}
+        run: |
+          set -euo pipefail
+          git_isolated() {
+            env -i PATH="$PATH" HOME=/nonexistent LANG=C LC_ALL=C \
+              GIT_CONFIG_NOSYSTEM=1 GIT_CONFIG_GLOBAL=/dev/null GIT_ATTR_NOSYSTEM=1 \
+              git -C "$GITHUB_WORKSPACE" -c safe.directory="$GITHUB_WORKSPACE" \
+                -c core.attributesFile=/dev/null \
+                -c core.fsmonitor=false -c core.hooksPath=/dev/null "$@"
+          }
+          assert_no_repo_drivers() {
+            local config entry key value origin status=0
+            config="$(git_isolated config --show-origin --includes --list 2>/dev/null)" || status=$?
+            if [ "$status" -ne 0 ]; then
+              echo 'unable to inspect effective repository Git config' >&2
+              return "$status"
+            fi
+            while IFS=$'\t' read -r origin entry; do
+              key="${entry%%=*}"
+              value="${entry#*=}"
+              case "$key" in
+                filter.*|diff.*.textconv|diff.*.command)
+                  echo 'repository-local diff/filter drivers are not supported' >&2
+                  return 1
+                  ;;
+                core.fsmonitor)
+                  [ "$value" = false ] || {
+                    echo 'repository fsmonitor configuration is not supported' >&2
+                    return 1
+                  }
+                  ;;
+                core.hookspath)
+                  [ "$value" = /dev/null ] || {
+                    echo 'repository hooksPath configuration is not supported' >&2
+                    return 1
+                  }
+                  ;;
+              esac
+            done <<<"$config"
+          }
+          assert_candidate() {
+            actual="$(git_isolated rev-parse HEAD)"
+            [ "$actual" = "$EXPECTED_SHA" ] || {
+              echo "checked out $actual, expected $EXPECTED_SHA" >&2
+              return 1
+            }
+            assert_no_repo_drivers
+            git_isolated diff --no-ext-diff --no-textconv --quiet
+            git_isolated diff --no-ext-diff --no-textconv --cached --quiet
+          }
+          assert_candidate
+      - name: Build the reviewed execution image
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+        run: |
+          set -euo pipefail
+          context="$(mktemp -d "$RUNNER_TEMP/ci-context.XXXXXX")"
+          if [ "$EVENT_NAME" = pull_request ]; then
+            printf '%s' "$BASE_SHA" | grep -Eq '^[0-9a-f]{40}$'
+            # Never execute a candidate Dockerfile on the runner host.
+            git archive "$BASE_SHA" ci | tar -x -C "$context" --strip-components=1
+          else
+            git archive HEAD ci | tar -x -C "$context" --strip-components=1
+          fi
+          docker build --tag "$CI_IMAGE" "$context"
+      - name: Run ./bin/ci gate on the exact SHA
+        env:
+          EXPECTED_SHA: ${{ steps.candidate.outputs.sha }}
+          CI_BASE_SHA: ${{ github.event.pull_request.base.sha }}
+        run: |
+          set -euo pipefail
+          if [ -d "$GITHUB_WORKSPACE/.git" ] && [ ! -L "$GITHUB_WORKSPACE/.git" ]; then
+            :
+          else
+            echo 'linked worktree or symlinked .git is not supported' >&2
+            exit 1
+          fi
+          # A restrictive runner umask must not hide the read-only Git mount from uid 1000.
+          chmod -R a+rX "$GITHUB_WORKSPACE/.git"
+          if [ -n "${DOCKER_HOST:-}" ] && docker info --format '{{.SecurityOptions}}' | grep -q rootless; then
+            # Rootless container root is the runner user. Restore ownership for post steps.
+            handoff() {
+              docker run --rm --init --user 0:0 -v "$GITHUB_WORKSPACE:/w" \
+                -v "$GITHUB_WORKSPACE/.git:/w/.git:ro" \
+                --entrypoint sh "$CI_IMAGE" -eu -c \
+                'find /w -path /w/.git -prune -o -exec chown -h "$1" {} +' sh "$1"
+            }
+            give_back() { handoff 0:0; }
+            trap give_back EXIT
+            handoff 1000:1000
+          else
+            sudo chown -R 1000:1000 "$GITHUB_WORKSPACE"
+          fi
+          # Host Git trusts .git/config after the container exits.
+          docker run --rm --init -v "$GITHUB_WORKSPACE:/workspace" \
+            -v "$GITHUB_WORKSPACE/.git:/workspace/.git:ro" \
+            -e LEFTHOOK=0 -e HUSKY=0 \
+            -e GIT_CONFIG_COUNT=1 -e GIT_CONFIG_KEY_0=safe.directory \
+            -e GIT_CONFIG_VALUE_0=/workspace \
+            -e "CI_EXPECTED_SHA=$EXPECTED_SHA" -e "CI_BASE_SHA=$CI_BASE_SHA" \
+            "$CI_IMAGE" sh -eu -c '
+              assert_candidate() {
+                [ "$(git rev-parse HEAD)" = "$CI_EXPECTED_SHA" ]
+                git diff --quiet
+                git diff --cached --quiet
+              }
+              assert_candidate
+              ./bin/ci gate
+              assert_candidate
+            '
+      - name: Confirm the candidate stayed unchanged
+        env:
+          EXPECTED_SHA: ${{ steps.candidate.outputs.sha }}
+        run: |
+          set -euo pipefail
+          git_isolated() {
+            env -i PATH="$PATH" HOME=/nonexistent LANG=C LC_ALL=C \
+              GIT_CONFIG_NOSYSTEM=1 GIT_CONFIG_GLOBAL=/dev/null GIT_ATTR_NOSYSTEM=1 \
+              git -C "$GITHUB_WORKSPACE" -c safe.directory="$GITHUB_WORKSPACE" \
+                -c core.attributesFile=/dev/null \
+                -c core.fsmonitor=false -c core.hooksPath=/dev/null "$@"
+          }
+          assert_no_repo_drivers() {
+            local config entry key value origin status=0
+            config="$(git_isolated config --show-origin --includes --list 2>/dev/null)" || status=$?
+            if [ "$status" -ne 0 ]; then
+              echo 'unable to inspect effective repository Git config' >&2
+              return "$status"
+            fi
+            while IFS=$'\t' read -r origin entry; do
+              key="${entry%%=*}"
+              value="${entry#*=}"
+              case "$key" in
+                filter.*|diff.*.textconv|diff.*.command)
+                  echo 'repository-local diff/filter drivers are not supported' >&2
+                  return 1
+                  ;;
+                core.fsmonitor)
+                  [ "$value" = false ] || {
+                    echo 'repository fsmonitor configuration is not supported' >&2
+                    return 1
+                  }
+                  ;;
+                core.hookspath)
+                  [ "$value" = /dev/null ] || {
+                    echo 'repository hooksPath configuration is not supported' >&2
+                    return 1
+                  }
+                  ;;
+              esac
+            done <<<"$config"
+          }
+          assert_candidate() {
+            actual="$(git_isolated rev-parse HEAD)"
+            [ "$actual" = "$EXPECTED_SHA" ] || {
+              echo "checked out $actual, expected $EXPECTED_SHA" >&2
+              return 1
+            }
+            assert_no_repo_drivers
+            git_isolated diff --no-ext-diff --no-textconv --quiet
+            git_isolated diff --no-ext-diff --no-textconv --cached --quiet
+          }
+          assert_candidate
+
+  qualification:
+    runs-on: ubuntu-slim
+    needs: [gate]
+    if: always()
+    timeout-minutes: 5
+    steps:
+      - name: Aggregate blocking lane results
+        env:
+          GATE_RESULT: ${{ needs.gate.result }}
+          DRAFT_PR: ${{ github.event.pull_request.draft }}
+        run: |
+          set -euo pipefail
+          printf 'blocking lane gate: %s\n' "$GATE_RESULT"
+          if [ "$GATE_RESULT" != success ]; then
+            if [ "$DRAFT_PR" = "true" ]; then
+              echo 'draft: gate not run' >&2
+            else
+              echo 'gate not qualified' >&2
+            fi
+            exit 1
+          fi
+          echo 'gate qualified'

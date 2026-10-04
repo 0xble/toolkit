@@ -1,0 +1,106 @@
+#!/usr/bin/env bash
+# Repository CI entrypoint. Profiles:
+#   preflight  quick local feedback: format, modules, vet, build, short tests
+#   gate       exact-SHA merge requirement: preflight lanes, lint, race tests
+#              including the end-to-end sample binary test
+#   nightly    gate plus repeated race runs and govulncheck
+# Needs Go (see go.mod). gate and nightly also need golangci-lint, and nightly
+# needs govulncheck; ci/Dockerfile pins both. Set CI_EXPECTED_SHA to assert
+# the tested commit.
+set -euo pipefail
+
+cd "$(dirname "$0")/.."
+export GOWORK=off GOFLAGS=-mod=readonly GOTOOLCHAIN="${GOTOOLCHAIN:-local}"
+
+log() { printf '==> %s\n' "$*" >&2; }
+
+assert_candidate() {
+  if [ -n "${CI_EXPECTED_SHA:-}" ]; then
+    actual="$(git rev-parse HEAD)"
+    [ "$actual" = "$CI_EXPECTED_SHA" ] || { echo "HEAD is $actual, expected $CI_EXPECTED_SHA" >&2; exit 1; }
+    git diff --quiet && git diff --cached --quiet || { echo "tracked files are modified" >&2; exit 1; }
+  fi
+}
+
+lane_fmt() {
+  log "lane fmt"
+  unformatted="$(gofmt -l .)"
+  [ -z "$unformatted" ] || { printf 'gofmt needed:\n%s\n' "$unformatted" >&2; return 1; }
+}
+
+lane_mod() {
+  log "lane mod"
+  go mod verify
+  go mod tidy -diff
+}
+
+lane_vet() {
+  log "lane vet"
+  go vet ./...
+  go build ./...
+}
+
+lane_test_short() {
+  log "lane test (short)"
+  go test -short -count=1 ./...
+}
+
+lane_lint() {
+  log "lane lint"
+  golangci-lint run ./...
+}
+
+lane_test() {
+  log "lane test (race, end to end)"
+  go test -race -count=1 ./...
+}
+
+lane_soak() {
+  log "lane soak (race x5)"
+  go test -race -count=5 ./...
+}
+
+lane_vuln() {
+  log "lane vuln"
+  govulncheck ./...
+}
+
+profile="${1:-}"
+case "$profile" in
+  preflight)
+    lane_fmt
+    lane_mod
+    lane_vet
+    if command -v golangci-lint >/dev/null; then
+      lane_lint
+    else
+      log "skipped lane lint: golangci-lint is not installed (gate runs it)"
+    fi
+    lane_test_short
+    ;;
+  gate)
+    assert_candidate
+    lane_fmt
+    lane_mod
+    lane_vet
+    lane_lint
+    lane_test
+    assert_candidate
+    ;;
+  nightly)
+    assert_candidate
+    lane_fmt
+    lane_mod
+    lane_vet
+    lane_lint
+    lane_test
+    lane_soak
+    lane_vuln
+    assert_candidate
+    ;;
+  *)
+    echo "usage: bin/ci preflight|gate|nightly" >&2
+    exit 2
+    ;;
+esac
+log "$profile passed"
