@@ -5,8 +5,14 @@
 #              including the end-to-end sample binary test
 #   nightly    gate plus repeated race runs and govulncheck
 # Needs Go (see go.mod). gate and nightly also need golangci-lint, and nightly
-# needs govulncheck; ci/Dockerfile pins both. Set CI_EXPECTED_SHA to assert
-# the tested commit.
+# needs govulncheck; ci/Dockerfile pins both.
+#
+# Usage: bin/ci preflight|gate|nightly [expected-sha]
+# An expected SHA (argument or CI_EXPECTED_SHA) is asserted, with a clean
+# tracked tree, before and after the lanes. A local gate or nightly run with
+# an expected SHA also writes an optional readiness receipt under
+# ${XDG_STATE_HOME:-~/.local/state}/ci-receipts; CI=true or
+# CI_SKIP_LOCAL_RECEIPT=true skips it. Nothing else reads personal state.
 set -euo pipefail
 
 cd "$(dirname "$0")/.."
@@ -14,11 +20,40 @@ export GOWORK=off GOFLAGS=-mod=readonly GOTOOLCHAIN="${GOTOOLCHAIN:-local}"
 
 log() { printf '==> %s\n' "$*" >&2; }
 
+expected_sha="${CI_EXPECTED_SHA:-${2:-}}"
+
 assert_candidate() {
-  if [ -n "${CI_EXPECTED_SHA:-}" ]; then
-    actual="$(git rev-parse HEAD)"
-    [ "$actual" = "$CI_EXPECTED_SHA" ] || { echo "HEAD is $actual, expected $CI_EXPECTED_SHA" >&2; exit 1; }
-    git diff --quiet && git diff --cached --quiet || { echo "tracked files are modified" >&2; exit 1; }
+  [ -n "$expected_sha" ] || return 0
+  printf '%s' "$expected_sha" | grep -Eq '^[0-9a-f]{40}$' || { echo "expected SHA must be 40 lowercase hex characters" >&2; exit 1; }
+  actual="$(git rev-parse HEAD)"
+  [ "$actual" = "$expected_sha" ] || { echo "HEAD is $actual, expected $expected_sha" >&2; exit 1; }
+  [ -z "$(git status --porcelain --untracked-files=no)" ] || { echo "tracked files are modified" >&2; exit 1; }
+}
+
+write_local_receipt() {
+  [ -n "$expected_sha" ] && [ "${CI:-}" != true ] && [ "${GITHUB_ACTIONS:-}" != true ] &&
+    [ "${CI_SKIP_LOCAL_RECEIPT:-}" != true ] || return 0
+  local remote owner repo branch dir receipt
+  remote="$(git remote get-url origin 2>/dev/null)" || { log "no receipt: origin remote is unavailable"; return 0; }
+  remote="${remote%/}"
+  remote="${remote%.git}"
+  repo="$(printf '%s' "${remote##*/}" | tr '[:upper:]' '[:lower:]')"
+  owner="${remote%/*}"
+  owner="$(printf '%s' "${owner##*[:/]}" | tr '[:upper:]' '[:lower:]')"
+  branch="$(git branch --show-current)"
+  if ! printf '%s\n%s\n%s\n' "$owner" "$repo" "$branch" | grep -Eqv '^[A-Za-z0-9._/-]+$'; then
+    dir="${CI_RECEIPT_ROOT:-${XDG_STATE_HOME:-$HOME/.local/state}/ci-receipts}/$owner/$repo"
+    receipt="$dir/$expected_sha.json"
+    mkdir -p "$dir"
+    (
+      umask 077
+      printf '{\n  "schema_version": 1,\n  "repository": "%s/%s",\n  "sha": "%s",\n  "branch": "%s",\n  "command": "./bin/ci gate",\n  "gate_exit": 0,\n  "clean_tracked_tree": true,\n  "timestamp": "%s"\n}\n' \
+        "$owner" "$repo" "$expected_sha" "$branch" "$(date -u +%Y-%m-%dT%H:%M:%SZ)" >"$receipt.tmp.$$"
+    )
+    mv -f "$receipt.tmp.$$" "$receipt"
+    log "local gate receipt: $receipt"
+  else
+    log "no receipt: unsupported origin or branch name"
   fi
 }
 
@@ -86,6 +121,7 @@ case "$profile" in
     lane_lint
     lane_test
     assert_candidate
+    write_local_receipt
     ;;
   nightly)
     assert_candidate
@@ -97,9 +133,10 @@ case "$profile" in
     lane_soak
     lane_vuln
     assert_candidate
+    write_local_receipt
     ;;
   *)
-    echo "usage: bin/ci preflight|gate|nightly" >&2
+    echo "usage: bin/ci preflight|gate|nightly [expected-sha]" >&2
     exit 2
     ;;
 esac
