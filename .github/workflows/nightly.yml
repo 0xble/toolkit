@@ -12,4 +12,4 @@ jobs:
   nightly:
     uses: ./.github/workflows/tool-nightly.yml
     with:
-      ci-image-dir: ci
+      go-version-file: .github/go-version

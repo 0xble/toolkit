@@ -16,7 +16,7 @@ jobs:
   gate:
     uses: ./.github/workflows/tool-gate.yml
     with:
-      ci-image-dir: ci
+      go-version-file: .github/go-version
 
   # The required check. A called workflow's jobs are reported as
   # "gate / ...", so this job carries the plain `qualification` name.
