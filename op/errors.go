@@ -123,7 +123,9 @@ type Authorizer interface {
 // AuthorizerFunc adapts a function to Authorizer.
 type AuthorizerFunc func(ctx context.Context, e *Entry, req Request) error
 
-func (f AuthorizerFunc) Authorize(ctx context.Context, e *Entry, req Request) error { return f(ctx, e, req) }
+func (f AuthorizerFunc) Authorize(ctx context.Context, e *Entry, req Request) error {
+	return f(ctx, e, req)
+}
 
 // DenyWrites allows reads and previews, and refuses any call that would apply
 // a write or destructive change. It is the default for served surfaces.

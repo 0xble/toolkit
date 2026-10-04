@@ -104,10 +104,9 @@ func applyDefaults(v reflect.Value) error {
 	t := v.Type()
 	for i := range t.NumField() {
 		f := t.Field(i)
-		if !f.IsExported() {
-			continue
-		}
 		fv := v.Field(i)
+		// An embedded struct's exported fields are promoted even when the
+		// struct type itself is unexported, as in encoding/json.
 		if f.Type.Kind() == reflect.Struct && (f.Anonymous || f.Tag.Get("embed") != "") {
 			if err := applyDefaults(fv); err != nil {
 				return err
@@ -115,7 +114,7 @@ func applyDefaults(v reflect.Value) error {
 			continue
 		}
 		def, ok := f.Tag.Lookup("default")
-		if !ok {
+		if !ok || !f.IsExported() {
 			continue
 		}
 		d, err := parseDefault(f.Type, def)

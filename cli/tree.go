@@ -121,7 +121,7 @@ func (a *app) parseGlobals(g any) error {
 	}
 	v := reflect.ValueOf(g)
 	if v.Kind() != reflect.Pointer || v.Elem().Kind() != reflect.Struct {
-		return fmt.Errorf("Globals must be a pointer to a struct, got %T", g)
+		return fmt.Errorf("options.Globals must be a pointer to a struct, got %T", g)
 	}
 	v = v.Elem()
 	for i := range v.NumField() {

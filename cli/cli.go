@@ -186,7 +186,7 @@ func (a *app) runOp(ctx context.Context, kctx *kong.Context, l *leaf, opts Optio
 		}
 		return output.ExitOK
 	}
-	v := any(out)
+	v := out
 	if strings.TrimSpace(a.root.Fields) != "" {
 		if v, err = output.FilterFields(v, strings.Split(a.root.Fields, ",")); err != nil {
 			return writeErr(opts.Stderr, format, op.Errorf(op.KindUsage, "invalid_fields", "%s", err.Error()))
