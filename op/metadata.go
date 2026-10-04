@@ -28,9 +28,8 @@ type Metadata struct {
 
 // OperationInfo describes one operation in the metadata document.
 type OperationInfo struct {
-	Name string `json:"name"`
-	CLI  string `json:"cli"`
-	// Aliases are the CLI aliases of the last CLI word, when there are any.
+	Name    string             `json:"name"`
+	CLI     string             `json:"cli"`
 	Aliases []string           `json:"aliases,omitempty"`
 	Summary string             `json:"summary"`
 	Effect  Effect             `json:"effect"`
