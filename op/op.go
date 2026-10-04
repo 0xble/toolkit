@@ -247,6 +247,9 @@ func commandWords(p []string) []string {
 	return out
 }
 
+// CLI is the command path as declared, e.g. "note <id> delete".
+func (e *Entry) CLI() string { return strings.Join(e.CLIPath, " ") }
+
 // CommandKey is the CLI path without placeholders, e.g. "note delete".
 func (e *Entry) CommandKey() string { return strings.Join(commandWords(e.CLIPath), " ") }
 
