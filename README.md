@@ -149,6 +149,56 @@ and MCP return the same output, that destructive operations refuse to apply
 without `confirm` on every surface, and that writes change nothing without
 `apply`.
 
+## Tool CI
+
+toolkit publishes the CI a tool repository runs, as two reusable workflows
+and a template:
+
+```text
+templates/tool/
+├── bin/ci                      preflight | gate [sha] | nightly [sha]
+└── .github/workflows/
+    ├── gate.yml                calls tool-gate.yml@<tag>, plus `qualification`
+    └── nightly.yml             calls tool-nightly.yml@<tag>
+.github/workflows/
+├── tool-gate.yml               exact-SHA gate and its qualification job
+└── tool-nightly.yml            ./bin/ci nightly on the scheduled commit
+```
+
+Copy `templates/tool` into the tool's root and pin the workflows to a toolkit
+tag. The tool's `bin/ci gate` runs `./bin/check` (the rendered fleet policy),
+`go test -race ./...` and `golangci-lint`, with `GOWORK=off`. `nightly` adds
+five repeated race runs and `govulncheck`. `preflight` is quick local feedback.
+
+`tool-gate.yml` checks out the pull request's head SHA, never a merge commit,
+asserts it, runs `./bin/ci gate <sha>` and asserts the tree is unchanged after.
+Its `qualification` job fails when the gate lane did not succeed. A draft pull
+request skips the lane and fails with `draft: gate not run`, except a Mergify
+merge-queue batch draft from a `mergify/merge-queue/` branch, which runs the
+full gate. GitHub reports a called workflow's jobs as `gate / qualification`,
+so the caller keeps its own `qualification` job, the one branch protection
+requires.
+
+| Input | Default | Purpose |
+| --- | --- | --- |
+| `go-version-file` | `go.mod` | Go version for `actions/setup-go` |
+| `runner` | `vars.CI_RUNNER`, then `ubuntu-24.04` | Gate runner. The nightly uses `vars.CI_NIGHTLY_RUNNER` |
+| `ci-image-dir` | empty | Directory with the Dockerfile of an execution image, for example `ci` |
+| `golangci-lint-version` | `v2.13.2` | Installed when no image is used |
+| `govulncheck-version` | `v1.8.0` | Nightly only, installed when no image is used |
+
+Without `ci-image-dir`, `bin/ci` runs on the runner after `actions/setup-go`.
+With it, `bin/ci` runs inside an image built from that directory. A pull
+request builds the base SHA's copy, never its own, so a Dockerfile change takes
+effect once it lands. The image is tagged with the directory's Git tree SHA. On
+Namespace runners it is pulled from the workspace registry and built only on a
+miss, and a push to the default branch publishes it. toolkit's own gate and
+nightly call these workflows by local path, with `ci-image-dir: ci`.
+
+`bin/ci gate <sha>` writes an optional local readiness receipt unless `CI=true`
+or `CI_SKIP_LOCAL_RECEIPT=true`, so a wrapper that writes its own receipt can
+call it.
+
 ## Stability
 
 toolkit is pre-1.0. Minor versions may break the API. Pin a tag

@@ -1,12 +1,14 @@
 #!/usr/bin/env bash
-# Repository CI entrypoint. Profiles:
-#   preflight  quick local feedback: format, modules, vet, build, templates,
-#              short tests
-#   gate       exact-SHA merge requirement: preflight lanes, lint, race tests
-#              including the end-to-end sample binary test
+# Repository CI entrypoint for a Go tool, from github.com/0xble/toolkit
+# templates/tool. Profiles:
+#   preflight  quick local feedback: format, modules, vet, build, short tests,
+#              lint when golangci-lint is installed
+#   gate       exact-SHA merge requirement: ./bin/check (the rendered fleet
+#              policy), race tests and golangci-lint
 #   nightly    gate plus repeated race runs and govulncheck
-# Needs Go (see go.mod). gate and nightly also need golangci-lint, and nightly
-# needs govulncheck; ci/Dockerfile pins both.
+# Needs Go (see go.mod) and bin/check's own tools. gate and nightly also need
+# golangci-lint, and nightly needs govulncheck. The reusable toolkit workflows
+# install them.
 #
 # Usage: bin/ci preflight|gate|nightly [expected-sha]
 # An expected SHA (argument or CI_EXPECTED_SHA) is asserted, with a clean
@@ -76,25 +78,25 @@ lane_vet() {
   go build ./...
 }
 
-lane_templates() {
-  log "lane templates"
-  bash -n templates/tool/bin/ci
-  [ -x templates/tool/bin/ci ] || { echo "templates/tool/bin/ci must be executable" >&2; return 1; }
-}
-
 lane_test_short() {
   log "lane test (short)"
   go test -short -count=1 ./...
 }
 
-lane_lint() {
-  log "lane lint"
-  golangci-lint run ./...
+lane_check() {
+  log "lane check (bin/check)"
+  [ -x bin/check ] || { echo "bin/check is missing: render it with the fleet policy" >&2; return 1; }
+  ./bin/check
 }
 
 lane_test() {
-  log "lane test (race, end to end)"
+  log "lane test (race)"
   go test -race -count=1 ./...
+}
+
+lane_lint() {
+  log "lane lint"
+  golangci-lint run ./...
 }
 
 lane_soak() {
@@ -113,7 +115,6 @@ case "$profile" in
     lane_fmt
     lane_mod
     lane_vet
-    lane_templates
     if command -v golangci-lint >/dev/null; then
       lane_lint
     else
@@ -123,23 +124,17 @@ case "$profile" in
     ;;
   gate)
     assert_candidate
-    lane_fmt
-    lane_mod
-    lane_vet
-    lane_templates
-    lane_lint
+    lane_check
     lane_test
+    lane_lint
     assert_candidate
     write_local_receipt
     ;;
   nightly)
     assert_candidate
-    lane_fmt
-    lane_mod
-    lane_vet
-    lane_templates
-    lane_lint
+    lane_check
     lane_test
+    lane_lint
     lane_soak
     lane_vuln
     assert_candidate

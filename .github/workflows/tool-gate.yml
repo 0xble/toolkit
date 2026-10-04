@@ -1,0 +1,374 @@
+name: tool-gate
+
+# Reusable exact-SHA gate for a Go tool. It validates the exact pull-request
+# head SHA, never an ephemeral merge commit, by running the caller's own
+# `./bin/ci gate <sha>`. Callers start from templates/tool/.github/workflows.
+#
+# Check names from a called workflow are prefixed with the caller's job
+# ("gate / qualification"), so the caller keeps a top-level `qualification`
+# job that requires this workflow's result. The draft and lane policy lives
+# here, in this workflow's own qualification job.
+
+on:
+  workflow_call:
+    inputs:
+      go-version-file:
+        description: >-
+          File that actions/setup-go reads the Go version from, when no CI
+          image is used. Pin a patched toolchain there.
+        type: string
+        default: go.mod
+      runner:
+        description: >-
+          Runner label for the gate lane. Empty uses vars.CI_RUNNER, then
+          ubuntu-24.04.
+        type: string
+        default: ""
+      ci-image-dir:
+        description: >-
+          Directory holding the Dockerfile of a reviewed execution image, for
+          example `ci`. A pull request builds it from the base SHA, never from
+          the candidate. Empty runs ./bin/ci on the runner with actions/setup-go
+          and golangci-lint.
+        type: string
+        default: ""
+      golangci-lint-version:
+        description: golangci-lint release installed when no CI image is used.
+        type: string
+        default: v2.13.2
+
+permissions:
+  contents: read
+
+jobs:
+  gate:
+    name: gate
+    # A draft runs no lanes and fails qualification, except a Mergify
+    # merge-queue batch draft: its head is the exact commit main
+    # fast-forwards to, so it runs the full gate.
+    if: >-
+      ${{ !github.event.pull_request.draft ||
+      (github.event.pull_request.user.login == 'mergify[bot]' &&
+      startsWith(github.event.pull_request.head.ref, 'mergify/merge-queue/')) }}
+    runs-on: ${{ inputs.runner || vars.CI_RUNNER || 'ubuntu-24.04' }}
+    timeout-minutes: 30
+    steps:
+      - name: Resolve the exact candidate SHA
+        id: candidate
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          PR_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          PUSH_SHA: ${{ github.sha }}
+          IMAGE_DIR: ${{ inputs.ci-image-dir }}
+          LINT_VERSION: ${{ inputs.golangci-lint-version }}
+        run: |
+          set -euo pipefail
+          case "$EVENT_NAME" in
+            pull_request) sha="$PR_HEAD_SHA" ;;
+            *) sha="$PUSH_SHA" ;;
+          esac
+          printf '%s' "$sha" | grep -Eq '^[0-9a-f]{40}$' || { echo "unusable candidate SHA: $sha" >&2; exit 1; }
+          if [ -n "$IMAGE_DIR" ]; then
+            if ! printf '%s' "$IMAGE_DIR" | grep -Eq '^[A-Za-z0-9_][A-Za-z0-9._/-]*$' ||
+              printf '%s' "$IMAGE_DIR" | grep -Eq '(^|/)\.\.(/|$)'; then
+              echo "ci-image-dir must be a relative path inside the repository" >&2
+              exit 1
+            fi
+          fi
+          printf '%s' "$LINT_VERSION" | grep -Eq '^v[0-9]+\.[0-9]+\.[0-9]+$' ||
+            { echo "golangci-lint-version must look like v2.13.2" >&2; exit 1; }
+          echo "sha=$sha" >>"$GITHUB_OUTPUT"
+
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          ref: ${{ steps.candidate.outputs.sha }}
+          # The image is built from the base SHA's tree, so image mode needs history.
+          fetch-depth: ${{ inputs.ci-image-dir == '' && '1' || '0' }}
+          persist-credentials: false
+
+      - name: Confirm the checkout is the exact candidate
+        env:
+          EXPECTED_SHA: ${{ steps.candidate.outputs.sha }}
+        run: |
+          set -euo pipefail
+          git_isolated() {
+            env -i PATH="$PATH" HOME=/nonexistent LANG=C LC_ALL=C \
+              GIT_CONFIG_NOSYSTEM=1 GIT_CONFIG_GLOBAL=/dev/null GIT_ATTR_NOSYSTEM=1 \
+              git -C "$GITHUB_WORKSPACE" -c safe.directory="$GITHUB_WORKSPACE" \
+                -c core.attributesFile=/dev/null \
+                -c core.fsmonitor=false -c core.hooksPath=/dev/null "$@"
+          }
+          assert_no_repo_drivers() {
+            local config entry key value status=0
+            config="$(git_isolated config --show-origin --includes --list 2>/dev/null)" || status=$?
+            if [ "$status" -ne 0 ]; then
+              echo 'unable to inspect effective repository Git config' >&2
+              return "$status"
+            fi
+            while IFS=$'\t' read -r _ entry; do
+              key="${entry%%=*}"
+              value="${entry#*=}"
+              case "$key" in
+                filter.*|diff.*.textconv|diff.*.command)
+                  echo 'repository-local diff/filter drivers are not supported' >&2
+                  return 1
+                  ;;
+                core.fsmonitor)
+                  [ "$value" = false ] || {
+                    echo 'repository fsmonitor configuration is not supported' >&2
+                    return 1
+                  }
+                  ;;
+                core.hookspath)
+                  [ "$value" = /dev/null ] || {
+                    echo 'repository hooksPath configuration is not supported' >&2
+                    return 1
+                  }
+                  ;;
+              esac
+            done <<<"$config"
+          }
+          assert_candidate() {
+            actual="$(git_isolated rev-parse HEAD)"
+            [ "$actual" = "$EXPECTED_SHA" ] || {
+              echo "checked out $actual, expected $EXPECTED_SHA" >&2
+              return 1
+            }
+            assert_no_repo_drivers
+            git_isolated diff --no-ext-diff --no-textconv --quiet
+            git_isolated diff --no-ext-diff --no-textconv --cached --quiet
+          }
+          assert_candidate
+
+      # Runner mode: the hosted runner is the execution environment.
+      - if: ${{ inputs.ci-image-dir == '' }}
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: ${{ inputs.go-version-file }}
+          # A pull request must not seed a cache that main later restores.
+          cache: false
+
+      - if: ${{ inputs.ci-image-dir == '' }}
+        uses: golangci/golangci-lint-action@ba0d7d2ec06a0ea1cb5fa41b2e4a3ab91d21278a # v9.3.0
+        with:
+          version: ${{ inputs.golangci-lint-version }}
+          install-only: true
+          skip-cache: true
+
+      - name: Run ./bin/ci gate on the exact SHA
+        if: ${{ inputs.ci-image-dir == '' }}
+        env:
+          CI: "true"
+          CI_EXPECTED_SHA: ${{ steps.candidate.outputs.sha }}
+          CI_BASE_SHA: ${{ github.event.pull_request.base.sha }}
+        run: ./bin/ci gate "$CI_EXPECTED_SHA"
+
+      # Image mode: the reviewed image built from the base branch's directory.
+      - name: Resolve the trusted image context
+        id: image
+        if: ${{ inputs.ci-image-dir != '' }}
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          PUSH_SHA: ${{ github.sha }}
+          IMAGE_DIR: ${{ inputs.ci-image-dir }}
+        run: |
+          set -euo pipefail
+          git_isolated() {
+            env -i PATH="$PATH" HOME=/nonexistent LANG=C LC_ALL=C \
+              GIT_CONFIG_NOSYSTEM=1 GIT_CONFIG_GLOBAL=/dev/null GIT_ATTR_NOSYSTEM=1 \
+              git -C "$GITHUB_WORKSPACE" -c safe.directory="$GITHUB_WORKSPACE" \
+                -c core.attributesFile=/dev/null \
+                -c core.fsmonitor=false -c core.hooksPath=/dev/null "$@"
+          }
+          # Never build the image from an unreviewed PR context: a Dockerfile
+          # RUN executes on the runner host, outside the container. The image
+          # key is the reviewed directory's tree, not this run's identity.
+          if [ "$EVENT_NAME" = pull_request ]; then
+            reviewed_sha="$BASE_SHA"
+          else
+            reviewed_sha="$PUSH_SHA"
+          fi
+          printf '%s' "$reviewed_sha" | grep -Eq '^[0-9a-f]{40}$' || { echo "unusable reviewed SHA: $reviewed_sha" >&2; exit 1; }
+          tree_sha="$(git_isolated rev-parse "$reviewed_sha:$IMAGE_DIR")"
+          printf '%s' "$tree_sha" | grep -Eq '^[0-9a-f]{40}$'
+          context="$RUNNER_TEMP/ci-context"
+          rm -rf "$context"
+          mkdir -p "$context"
+          git_isolated archive "$tree_sha" | tar -x -C "$context"
+          printf 'image context: %s/ at %s (tree %s)\n' "$IMAGE_DIR" "$reviewed_sha" "$tree_sha"
+          if [ "$EVENT_NAME" = pull_request ] &&
+            ! git_isolated diff --no-ext-diff --no-textconv --quiet "$BASE_SHA" HEAD -- "$IMAGE_DIR"; then
+            printf '::notice::this pull request changes %s/; those changes are validated on main after it lands\n' "$IMAGE_DIR"
+          fi
+          repo_slug="$(printf '%s' "$GITHUB_REPOSITORY" | tr '[:upper:]' '[:lower:]')"
+          if [ -n "${NSC_CONTAINER_REGISTRY:-}" ]; then
+            # Namespace runner: reuse the image from the workspace registry.
+            image="${NSC_CONTAINER_REGISTRY%/}/${repo_slug}/ci:${tree_sha}"
+            registry=true
+          else
+            image="ci-image/${repo_slug}:${tree_sha}"
+            registry=false
+          fi
+          {
+            echo "context=$context"
+            echo "image=$image"
+            echo "registry=$registry"
+          } >>"$GITHUB_OUTPUT"
+
+      - name: Build or reuse the reviewed execution image
+        id: build
+        if: ${{ inputs.ci-image-dir != '' }}
+        env:
+          CONTEXT: ${{ steps.image.outputs.context }}
+          IMAGE: ${{ steps.image.outputs.image }}
+          REGISTRY: ${{ steps.image.outputs.registry }}
+        run: |
+          set -euo pipefail
+          if docker image inspect "$IMAGE" >/dev/null 2>&1; then
+            echo "reused local reviewed image: $IMAGE"
+          elif [ "$REGISTRY" = true ] && docker pull "$IMAGE"; then
+            echo "reused Namespace registry image: $IMAGE"
+          else
+            # A pull request never publishes the image it builds.
+            echo "building reviewed image: $IMAGE"
+            docker build --tag "$IMAGE" "$CONTEXT"
+          fi
+
+      - name: Publish the reviewed execution image from the default branch
+        if: >-
+          ${{ inputs.ci-image-dir != '' && github.event_name == 'push' &&
+          steps.image.outputs.registry == 'true' &&
+          github.ref == format('refs/heads/{0}', github.event.repository.default_branch) }}
+        env:
+          IMAGE: ${{ steps.image.outputs.image }}
+        run: docker push "$IMAGE"
+
+      - name: Run ./bin/ci gate on the exact SHA in the image
+        if: ${{ inputs.ci-image-dir != '' }}
+        env:
+          CI_IMAGE: ${{ steps.image.outputs.image }}
+          EXPECTED_SHA: ${{ steps.candidate.outputs.sha }}
+          CI_BASE_SHA: ${{ github.event.pull_request.base.sha }}
+        run: |
+          set -euo pipefail
+          if [ ! -d "$GITHUB_WORKSPACE/.git" ] || [ -L "$GITHUB_WORKSPACE/.git" ]; then
+            echo 'linked worktree or symlinked .git is not supported' >&2
+            exit 1
+          fi
+          # A restrictive runner umask must not hide the read-only Git mount from uid 1000.
+          chmod -R a+rX "$GITHUB_WORKSPACE/.git"
+          if [ -n "${DOCKER_HOST:-}" ] && docker info --format '{{.SecurityOptions}}' | grep -q rootless; then
+            # Rootless container root is the runner user. Restore ownership for post steps.
+            handoff() {
+              docker run --rm --init --user 0:0 -v "$GITHUB_WORKSPACE:/w" \
+                -v "$GITHUB_WORKSPACE/.git:/w/.git:ro" \
+                --entrypoint sh "$CI_IMAGE" -eu -c \
+                'find /w -path /w/.git -prune -o -exec chown -h "$1" {} +' sh "$1"
+            }
+            give_back() { handoff 0:0; }
+            trap give_back EXIT
+            handoff 1000:1000
+          else
+            # Namespace or GitHub-hosted: the image runs as uid 1000.
+            sudo chown -R 1000:1000 "$GITHUB_WORKSPACE"
+          fi
+          # Host Git trusts .git/config after the container exits.
+          docker run --rm --init -v "$GITHUB_WORKSPACE:/workspace" \
+            -v "$GITHUB_WORKSPACE/.git:/workspace/.git:ro" \
+            -e LEFTHOOK=0 -e HUSKY=0 -e CI=true \
+            -e GIT_CONFIG_COUNT=1 -e GIT_CONFIG_KEY_0=safe.directory \
+            -e GIT_CONFIG_VALUE_0=/workspace \
+            -e "CI_EXPECTED_SHA=$EXPECTED_SHA" -e "CI_BASE_SHA=$CI_BASE_SHA" \
+            "$CI_IMAGE" sh -eu -c './bin/ci gate "$CI_EXPECTED_SHA"'
+
+      - name: Remove the job's local image tag
+        # The content-addressed registry tag stays reusable.
+        if: ${{ always() && inputs.ci-image-dir != '' && steps.build.outcome == 'success' }}
+        env:
+          IMAGE: ${{ steps.image.outputs.image }}
+        run: docker image rm --no-prune "$IMAGE" >/dev/null
+
+      - name: Confirm the candidate stayed unchanged
+        env:
+          EXPECTED_SHA: ${{ steps.candidate.outputs.sha }}
+        run: |
+          set -euo pipefail
+          git_isolated() {
+            env -i PATH="$PATH" HOME=/nonexistent LANG=C LC_ALL=C \
+              GIT_CONFIG_NOSYSTEM=1 GIT_CONFIG_GLOBAL=/dev/null GIT_ATTR_NOSYSTEM=1 \
+              git -C "$GITHUB_WORKSPACE" -c safe.directory="$GITHUB_WORKSPACE" \
+                -c core.attributesFile=/dev/null \
+                -c core.fsmonitor=false -c core.hooksPath=/dev/null "$@"
+          }
+          assert_no_repo_drivers() {
+            local config entry key value status=0
+            config="$(git_isolated config --show-origin --includes --list 2>/dev/null)" || status=$?
+            if [ "$status" -ne 0 ]; then
+              echo 'unable to inspect effective repository Git config' >&2
+              return "$status"
+            fi
+            while IFS=$'\t' read -r _ entry; do
+              key="${entry%%=*}"
+              value="${entry#*=}"
+              case "$key" in
+                filter.*|diff.*.textconv|diff.*.command)
+                  echo 'repository-local diff/filter drivers are not supported' >&2
+                  return 1
+                  ;;
+                core.fsmonitor)
+                  [ "$value" = false ] || {
+                    echo 'repository fsmonitor configuration is not supported' >&2
+                    return 1
+                  }
+                  ;;
+                core.hookspath)
+                  [ "$value" = /dev/null ] || {
+                    echo 'repository hooksPath configuration is not supported' >&2
+                    return 1
+                  }
+                  ;;
+              esac
+            done <<<"$config"
+          }
+          assert_candidate() {
+            actual="$(git_isolated rev-parse HEAD)"
+            [ "$actual" = "$EXPECTED_SHA" ] || {
+              echo "checked out $actual, expected $EXPECTED_SHA" >&2
+              return 1
+            }
+            assert_no_repo_drivers
+            git_isolated diff --no-ext-diff --no-textconv --quiet
+            git_isolated diff --no-ext-diff --no-textconv --cached --quiet
+          }
+          assert_candidate
+
+  qualification:
+    name: qualification
+    # Aggregates results only, so it runs on the cheapest hosted runner and
+    # still reports when the lane runner is down.
+    runs-on: ubuntu-slim
+    needs: [gate]
+    if: always()
+    timeout-minutes: 5
+    steps:
+      # A skipped, cancelled or failed blocking lane never qualifies.
+      - name: Aggregate blocking lane results
+        env:
+          GATE_RESULT: ${{ needs.gate.result }}
+          DRAFT_PR: ${{ github.event.pull_request.draft }}
+          PR_AUTHOR: ${{ github.event.pull_request.user.login }}
+          HEAD_REF: ${{ github.event.pull_request.head.ref }}
+        run: |
+          set -euo pipefail
+          printf 'blocking lane gate: %s\n' "$GATE_RESULT"
+          if [ "$GATE_RESULT" != success ]; then
+            if [ "$DRAFT_PR" = true ] &&
+              ! { [ "$PR_AUTHOR" = 'mergify[bot]' ] && case "$HEAD_REF" in mergify/merge-queue/*) true ;; *) false ;; esac; }; then
+              echo 'draft: gate not run' >&2
+            else
+              echo 'gate not qualified' >&2
+            fi
+            exit 1
+          fi
+          echo 'gate qualified'

@@ -1,4 +1,5 @@
 name: nightly
+# From github.com/0xble/toolkit templates/tool.
 on:
   schedule:
     - cron: "17 9 * * *"
@@ -10,6 +11,4 @@ concurrency:
   cancel-in-progress: false
 jobs:
   nightly:
-    uses: ./.github/workflows/tool-nightly.yml
-    with:
-      ci-image-dir: ci
+    uses: 0xble/toolkit/.github/workflows/tool-nightly.yml@v0.1.1
