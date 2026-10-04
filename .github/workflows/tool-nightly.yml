@@ -1,0 +1,155 @@
+name: tool-nightly
+
+# Reusable nightly for a Go tool: runs the caller's `./bin/ci nightly <sha>`
+# on the exact commit the schedule or dispatch resolved. Callers start from
+# templates/tool/.github/workflows/nightly.yml.
+
+on:
+  workflow_call:
+    inputs:
+      go-version-file:
+        description: >-
+          File that actions/setup-go reads the Go version from, when no CI
+          image is used. Pin a patched toolchain there, since govulncheck
+          reports standard library vulnerabilities of the installed Go.
+        type: string
+        default: go.mod
+      runner:
+        description: >-
+          Runner label. Empty uses vars.CI_NIGHTLY_RUNNER, then ubuntu-24.04.
+        type: string
+        default: ""
+      ci-image-dir:
+        description: >-
+          Directory holding the Dockerfile of the execution image, for example
+          `ci`, built from the nightly's own commit. Empty runs ./bin/ci on the
+          runner with actions/setup-go, golangci-lint and govulncheck.
+        type: string
+        default: ""
+      golangci-lint-version:
+        description: golangci-lint release installed when no CI image is used.
+        type: string
+        default: v2.13.2
+      govulncheck-version:
+        description: govulncheck release installed when no CI image is used.
+        type: string
+        default: v1.8.0
+
+permissions:
+  contents: read
+
+jobs:
+  nightly:
+    name: nightly
+    runs-on: ${{ inputs.runner || vars.CI_NIGHTLY_RUNNER || 'ubuntu-24.04' }}
+    timeout-minutes: 45
+    steps:
+      - name: Resolve the exact SHA
+        id: candidate
+        env:
+          RUN_SHA: ${{ github.sha }}
+          IMAGE_DIR: ${{ inputs.ci-image-dir }}
+          LINT_VERSION: ${{ inputs.golangci-lint-version }}
+          VULN_VERSION: ${{ inputs.govulncheck-version }}
+        run: |
+          set -euo pipefail
+          printf '%s' "$RUN_SHA" | grep -Eq '^[0-9a-f]{40}$' || { echo "unusable SHA: $RUN_SHA" >&2; exit 1; }
+          if [ -n "$IMAGE_DIR" ]; then
+            if ! printf '%s' "$IMAGE_DIR" | grep -Eq '^[A-Za-z0-9_][A-Za-z0-9._/-]*$' ||
+              printf '%s' "$IMAGE_DIR" | grep -Eq '(^|/)\.\.(/|$)'; then
+              echo "ci-image-dir must be a relative path inside the repository" >&2
+              exit 1
+            fi
+          fi
+          for version in "$LINT_VERSION" "$VULN_VERSION"; do
+            printf '%s' "$version" | grep -Eq '^v[0-9]+\.[0-9]+\.[0-9]+$' ||
+              { echo "tool versions must look like v1.2.3, got $version" >&2; exit 1; }
+          done
+          echo "sha=$RUN_SHA" >>"$GITHUB_OUTPUT"
+
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          ref: ${{ steps.candidate.outputs.sha }}
+          persist-credentials: false
+
+      - name: Confirm the checkout is the exact SHA
+        env:
+          EXPECTED_SHA: ${{ steps.candidate.outputs.sha }}
+        run: |
+          set -euo pipefail
+          actual="$(git rev-parse HEAD)"
+          [ "$actual" = "$EXPECTED_SHA" ] || { echo "checked out $actual, expected $EXPECTED_SHA" >&2; exit 1; }
+
+      # Runner mode: the hosted runner is the execution environment.
+      - if: ${{ inputs.ci-image-dir == '' }}
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: ${{ inputs.go-version-file }}
+          cache: false
+
+      - if: ${{ inputs.ci-image-dir == '' }}
+        uses: golangci/golangci-lint-action@ba0d7d2ec06a0ea1cb5fa41b2e4a3ab91d21278a # v9.3.0
+        with:
+          version: ${{ inputs.golangci-lint-version }}
+          install-only: true
+          skip-cache: true
+
+      - name: Install govulncheck
+        if: ${{ inputs.ci-image-dir == '' }}
+        env:
+          VULN_VERSION: ${{ inputs.govulncheck-version }}
+        run: |
+          set -euo pipefail
+          bin="$RUNNER_TEMP/tool-bin"
+          GOBIN="$bin" GOFLAGS='' go install "golang.org/x/vuln/cmd/govulncheck@$VULN_VERSION"
+          echo "$bin" >>"$GITHUB_PATH"
+
+      - name: Run ./bin/ci nightly on the exact SHA
+        if: ${{ inputs.ci-image-dir == '' }}
+        env:
+          CI: "true"
+          CI_EXPECTED_SHA: ${{ steps.candidate.outputs.sha }}
+        run: ./bin/ci nightly "$CI_EXPECTED_SHA"
+
+      # Image mode. A schedule runs the default branch, so its own directory
+      # is reviewed. A dispatch needs write access to the repository.
+      - name: Build the execution image
+        id: build
+        if: ${{ inputs.ci-image-dir != '' }}
+        env:
+          IMAGE_DIR: ${{ inputs.ci-image-dir }}
+        run: |
+          set -euo pipefail
+          tree_sha="$(git rev-parse "HEAD:$IMAGE_DIR")"
+          repo_slug="$(printf '%s' "$GITHUB_REPOSITORY" | tr '[:upper:]' '[:lower:]')"
+          if [ -n "${NSC_CONTAINER_REGISTRY:-}" ]; then
+            image="${NSC_CONTAINER_REGISTRY%/}/${repo_slug}/ci:${tree_sha}"
+          else
+            image="ci-image/${repo_slug}:${tree_sha}"
+          fi
+          if docker image inspect "$image" >/dev/null 2>&1; then
+            echo "reused local image: $image"
+          elif [ -n "${NSC_CONTAINER_REGISTRY:-}" ] && docker pull "$image"; then
+            echo "reused Namespace registry image: $image"
+          else
+            echo "building image: $image"
+            docker build --tag "$image" "$IMAGE_DIR"
+          fi
+          echo "image=$image" >>"$GITHUB_OUTPUT"
+
+      - name: Run ./bin/ci nightly on the exact SHA in the image
+        if: ${{ inputs.ci-image-dir != '' }}
+        env:
+          CI_IMAGE: ${{ steps.build.outputs.image }}
+          EXPECTED_SHA: ${{ steps.candidate.outputs.sha }}
+        run: |
+          set -euo pipefail
+          chmod -R a+rX "$GITHUB_WORKSPACE/.git"
+          sudo chown -R 1000:1000 "$GITHUB_WORKSPACE"
+          docker run --rm --init -v "$GITHUB_WORKSPACE:/workspace" \
+            -v "$GITHUB_WORKSPACE/.git:/workspace/.git:ro" \
+            -e CI=true \
+            -e GIT_CONFIG_COUNT=1 -e GIT_CONFIG_KEY_0=safe.directory \
+            -e GIT_CONFIG_VALUE_0=/workspace \
+            -e "CI_EXPECTED_SHA=$EXPECTED_SHA" \
+            "$CI_IMAGE" sh -eu -c './bin/ci nightly "$CI_EXPECTED_SHA"'
