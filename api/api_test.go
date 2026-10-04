@@ -1,0 +1,96 @@
+package api_test
+
+import (
+	"context"
+	"errors"
+	"net/http"
+	"net/http/httptest"
+	"strings"
+	"testing"
+
+	"github.com/0xble/toolkit/api"
+	"github.com/0xble/toolkit/op"
+	"github.com/0xble/toolkit/toolkittest"
+)
+
+type in struct {
+	Name string `json:"name"`
+}
+
+type out struct {
+	Applied bool `json:"applied"`
+}
+
+func registry() *op.Registry {
+	r := op.New("t", "v")
+	op.Add(r, op.Op[in, out]{Name: "thing.make", Effect: op.Write, Handler: func(_ context.Context, req op.Request, _ in) (out, error) {
+		return out{Applied: req.Apply}, nil
+	}})
+	return r
+}
+
+func call(t *testing.T, h http.Handler, body string) (int, string) {
+	t.Helper()
+	w := httptest.NewRecorder()
+	r := httptest.NewRequest(http.MethodPost, "/ops/thing.make", strings.NewReader(body))
+	r.Header.Set("X-Caller", "alice")
+	h.ServeHTTP(w, r)
+	return w.Code, w.Body.String()
+}
+
+func TestPluggableAuthorizerSeesTheRequest(t *testing.T) {
+	auth := op.AuthorizerFunc(func(_ context.Context, _ *op.Entry, req op.Request) error {
+		if req.Surface != op.SurfaceHTTP || req.HTTP == nil || req.HTTP.Header.Get("X-Caller") != "alice" {
+			return errors.New("unexpected request")
+		}
+		return nil
+	})
+	code, body := call(t, api.Handler(registry(), api.Options{Authorizer: auth}), `{"name":"x","apply":true}`)
+	if code != 200 || strings.TrimSpace(body) != `{"applied":true}` {
+		t.Errorf("custom authorizer: %d %s", code, body)
+	}
+	code, body = call(t, api.Handler(registry(), api.Options{}), `{"name":"x","apply":true}`)
+	if code != 403 || toolkittest.ErrorCode([]byte(body)) != "write_not_authorized" {
+		t.Errorf("default authorizer: %d %s", code, body)
+	}
+	code, body = call(t, api.Handler(registry(), api.Options{Authorizer: op.AuthorizerFunc(func(context.Context, *op.Entry, op.Request) error {
+		return errors.New("nope")
+	})}), `{"name":"x"}`)
+	if code != 403 || toolkittest.ErrorCode([]byte(body)) != "auth" {
+		t.Errorf("a plain authorizer error is an auth error: %d %s", code, body)
+	}
+}
+
+func TestBadBodies(t *testing.T) {
+	h := api.Handler(registry(), api.Options{})
+	for body, want := range map[string]string{
+		`[1]`:                    "invalid_input",
+		`{"name":1}`:             "invalid_input",
+		`{"name":"x","extra":1}`: "invalid_input",
+		`{"name":"` + strings.Repeat("a", api.MaxBodyBytes) + `"}`: "input_too_large",
+	} {
+		if code, got := call(t, h, body); code != 400 || toolkittest.ErrorCode([]byte(got)) != want {
+			t.Errorf("%.40s: %d %.200s; want 400 %s", body, code, got, want)
+		}
+	}
+}
+
+func TestOpenAPIMatchesRegistry(t *testing.T) {
+	r := registry()
+	w := httptest.NewRecorder()
+	api.Handler(r, api.Options{}).ServeHTTP(w, httptest.NewRequest(http.MethodGet, "/openapi.json", nil))
+	toolkittest.CheckOpenAPI(t, r, w.Body.Bytes())
+}
+
+func TestUnknownRouteIsJSON(t *testing.T) {
+	for _, req := range []*http.Request{
+		httptest.NewRequest(http.MethodGet, "/nope", nil),
+		httptest.NewRequest(http.MethodGet, "/ops/thing.make", nil),
+	} {
+		w := httptest.NewRecorder()
+		api.Handler(registry(), api.Options{}).ServeHTTP(w, req)
+		if w.Code != 404 || toolkittest.ErrorCode(w.Body.Bytes()) != "unknown_route" {
+			t.Errorf("%s %s: %d %s", req.Method, req.URL, w.Code, w.Body)
+		}
+	}
+}

@@ -1,0 +1,47 @@
+name: nightly
+on:
+  schedule:
+    - cron: "17 9 * * *"
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: nightly-${{ github.ref }}
+  cancel-in-progress: false
+jobs:
+  nightly:
+    runs-on: ${{ vars.CI_NIGHTLY_RUNNER || 'ubuntu-24.04' }}
+    timeout-minutes: 45
+    env:
+      CI_IMAGE: ci-nightly-${{ github.run_id }}-${{ github.run_attempt }}
+    steps:
+      - name: Resolve the exact SHA
+        id: candidate
+        env:
+          RUN_SHA: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          printf '%s' "$RUN_SHA" | grep -Eq '^[0-9a-f]{40}$'
+          echo "sha=$RUN_SHA" >> "$GITHUB_OUTPUT"
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          ref: ${{ steps.candidate.outputs.sha }}
+          persist-credentials: false
+      - name: Build the execution image
+        run: |
+          set -euo pipefail
+          docker build --tag "$CI_IMAGE" ci
+      - name: Run ./bin/ci nightly on the exact SHA
+        env:
+          EXPECTED_SHA: ${{ steps.candidate.outputs.sha }}
+        run: |
+          set -euo pipefail
+          [ "$(git rev-parse HEAD)" = "$EXPECTED_SHA" ]
+          chmod -R a+rX "$GITHUB_WORKSPACE/.git"
+          sudo chown -R 1000:1000 "$GITHUB_WORKSPACE"
+          docker run --rm --init -v "$GITHUB_WORKSPACE:/workspace" \
+            -v "$GITHUB_WORKSPACE/.git:/workspace/.git:ro" \
+            -e GIT_CONFIG_COUNT=1 -e GIT_CONFIG_KEY_0=safe.directory \
+            -e GIT_CONFIG_VALUE_0=/workspace \
+            -e "CI_EXPECTED_SHA=$EXPECTED_SHA" \
+            "$CI_IMAGE" ./bin/ci nightly
