@@ -13,6 +13,7 @@ import (
 	"net/http"
 	"reflect"
 	"regexp"
+	"slices"
 	"sort"
 	"strings"
 
@@ -58,9 +59,11 @@ type Request struct {
 	HTTP *http.Request
 }
 
-// Op declares one operation. In and Out are structs (Out may be any JSON
-// value type). Input field tags carry both the wire shape (json) and the CLI
-// shape (kong: arg, name, short, help, default).
+// Op declares one operation. In is a struct. Out is usually a struct but may
+// be any type that encodes to JSON: any and json.RawMessage declare an output
+// that may be any JSON value, and map[string]any any JSON object. Input field
+// tags carry both the wire shape (json) and the CLI shape (kong: arg, name,
+// short, help, default).
 type Op[In, Out any] struct {
 	// Name is the canonical dotted name, e.g. "note.delete".
 	Name string
@@ -78,12 +81,21 @@ type Op[In, Out any] struct {
 	// "items list" as "items". The word still works and is hidden from help.
 	// At most one operation may be the default under a parent.
 	DefaultCommand bool
+	// Aliases are extra names of the last CLI word, as kong aliases: with
+	// Aliases ["s"], "search <query>" also runs as "s <query>". They are
+	// CLI-only and change no HTTP route, MCP name or operation name.
+	Aliases []string
 	// Handler implements the operation. For write and destructive operations
 	// it must not change state unless req.Apply is true.
 	Handler func(ctx context.Context, req Request, in In) (Out, error)
 	// Render optionally prints a human summary of the result. Without it the
 	// CLI prints JSON.
 	Render func(w io.Writer, out Out) error
+	// Warnings optionally lists warnings carried in the result. In human
+	// output the CLI prints each to stderr as "warning: <text>" before the
+	// result. With --json or --agent, and on HTTP and MCP, nothing extra is
+	// printed: callers read the warnings in the result itself.
+	Warnings func(out Out) []string
 }
 
 // Entry is the type-erased view of an operation that surfaces use.
@@ -95,10 +107,13 @@ type Entry struct {
 	MCP     bool
 	// DefaultCommand is Op.DefaultCommand.
 	DefaultCommand bool
-	In, Out        reflect.Type
+	// Aliases is Op.Aliases.
+	Aliases []string
+	In, Out reflect.Type
 
 	call     func(ctx context.Context, req Request, in any) (any, error)
 	render   func(w io.Writer, out any) error
+	warnings func(out any) []string
 	inSchema *jsonschema.Schema
 	wire     *jsonschema.Schema
 	resolved *jsonschema.Resolved
@@ -156,7 +171,7 @@ func newEntry[In, Out any](r *Registry, o Op[In, Out]) (*Entry, error) {
 		return nil, fmt.Errorf("handler is nil")
 	}
 	e := &Entry{Name: o.Name, Summary: o.Summary, Effect: o.Effect, MCP: o.MCP, DefaultCommand: o.DefaultCommand,
-		In: reflect.TypeFor[In](), Out: reflect.TypeFor[Out]()}
+		Aliases: slices.Clone(o.Aliases), In: reflect.TypeFor[In](), Out: reflect.TypeFor[Out]()}
 	if e.In.Kind() != reflect.Struct {
 		return nil, fmt.Errorf("input must be a struct, got %s", e.In)
 	}
@@ -215,20 +230,42 @@ func newEntry[In, Out any](r *Registry, o Op[In, Out]) (*Entry, error) {
 	}
 	if o.Render != nil {
 		e.render = func(w io.Writer, out any) error {
-			v, ok := out.(Out)
-			if !ok {
-				return fmt.Errorf("op %s: output is %T, want %s", o.Name, out, e.Out)
+			v, err := typedOut[Out](e, out)
+			if err != nil {
+				return err
 			}
 			return o.Render(w, v)
+		}
+	}
+	if o.Warnings != nil {
+		e.warnings = func(out any) []string {
+			// Surfaces only pass outputs the handler returned, so a mismatch
+			// is impossible; Render reports it if it ever happens.
+			v, err := typedOut[Out](e, out)
+			if err != nil {
+				return nil
+			}
+			return o.Warnings(v)
 		}
 	}
 	return e, nil
 }
 
-// checkPath validates the CLI words and rejects paths that would collide in
-// the command tree: identical paths, paths equal after placeholders are
-// removed, and a path that is a prefix of another (a command cannot be both
-// runnable and a group).
+// typedOut converts an output back to Out. A nil output is the zero value of
+// an interface Out such as any.
+func typedOut[Out any](e *Entry, out any) (Out, error) {
+	v, ok := out.(Out)
+	if !ok && (out != nil || e.Out.Kind() != reflect.Interface) {
+		return v, fmt.Errorf("op %s: output is %T, want %s", e.Name, out, e.Out)
+	}
+	return v, nil
+}
+
+// checkPath validates the CLI words and aliases and rejects paths that would
+// collide in the command tree: identical paths, paths equal after
+// placeholders are removed, and a path that is a prefix of another (a command
+// cannot be both runnable and a group). Each alias claims the path with the
+// last word replaced, under the same rules.
 func checkPath(r *Registry, e *Entry) error {
 	if len(e.CLIPath) == 0 || placeholderRE.MatchString(e.CLIPath[0]) {
 		return fmt.Errorf("CLI path must start with a command word")
@@ -242,16 +279,32 @@ func checkPath(r *Registry, e *Entry) error {
 			return fmt.Errorf("invalid CLI word %q", w)
 		}
 	}
-	key := strings.Join(commandWords(e.CLIPath), " ")
-	if other, ok := r.paths[key]; ok {
-		return fmt.Errorf("CLI path collides with %s", other)
+	words := commandWords(e.CLIPath)
+	keys := []string{strings.Join(words, " ")}
+	for _, a := range e.Aliases {
+		if !wordRE.MatchString(a) {
+			return fmt.Errorf("invalid alias %q", a)
+		}
+		keys = append(keys, strings.Join(append(slices.Clone(words[:len(words)-1]), a), " "))
 	}
-	for k, other := range r.paths {
-		if strings.HasPrefix(k+" ", key+" ") || strings.HasPrefix(key+" ", k+" ") {
-			return fmt.Errorf("CLI path %q and %s's path are prefixes of each other", key, other)
+	claimed := map[string]bool{}
+	for _, key := range keys {
+		if claimed[key] {
+			return fmt.Errorf("CLI path %q is declared twice by its word and aliases", key)
+		}
+		claimed[key] = true
+		if other, ok := r.paths[key]; ok {
+			return fmt.Errorf("CLI path %q collides with %s", key, other)
+		}
+		for k, other := range r.paths {
+			if strings.HasPrefix(k+" ", key+" ") || strings.HasPrefix(key+" ", k+" ") {
+				return fmt.Errorf("CLI path %q and %s's path are prefixes of each other", key, other)
+			}
 		}
 	}
-	r.paths[key] = e.Name
+	for _, key := range keys {
+		r.paths[key] = e.Name
+	}
 	return nil
 }
 
@@ -294,6 +347,15 @@ func (e *Entry) InputSchema() *jsonschema.Schema { return cloneSchema(e.wire) }
 
 // OutputSchema is the JSON Schema of the result. The caller gets a copy.
 func (e *Entry) OutputSchema() *jsonschema.Schema { return cloneSchema(e.out) }
+
+// Warnings returns the warnings the operation's Warnings hook finds in out,
+// or nil without a hook.
+func (e *Entry) Warnings(out any) []string {
+	if e.warnings == nil {
+		return nil
+	}
+	return e.warnings(out)
+}
 
 // CanRender reports whether the operation has a human render hook.
 func (e *Entry) CanRender() bool { return e.render != nil }

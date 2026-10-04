@@ -2,6 +2,7 @@ package toolkittest_test
 
 import (
 	"context"
+	"encoding/json"
 	"os"
 	"os/exec"
 	"strings"
@@ -92,4 +93,37 @@ func TestBrokenFixturesFail(t *testing.T) {
 			}
 		})
 	}
+}
+
+// TestAnyJSONOutputConforms runs the kit over operations whose output may be
+// any JSON value, including a destructive raw passthrough called through its
+// CLI alias.
+func TestAnyJSONOutputConforms(t *testing.T) {
+	newFixture := func(testing.TB) toolkittest.Fixture {
+		sent := 0
+		r := op.New("raw", "v")
+		for name, v := range map[string]any{"doc.array": []any{1, "x"}, "doc.string": "s", "doc.null": nil, "doc.object": map[string]any{"a": 1}} {
+			op.Add(r, op.Op[struct{}, any]{Name: name, Effect: op.Read, MCP: true,
+				Handler: func(context.Context, op.Request, struct{}) (any, error) { return v, nil }})
+		}
+		op.Add(r, op.Op[in, json.RawMessage]{Name: "raw", Effect: op.Destructive, MCP: true, Aliases: []string{"passthrough"},
+			Handler: func(_ context.Context, req op.Request, in in) (json.RawMessage, error) {
+				if !req.Apply {
+					return json.RawMessage(`{"applied":false}`), nil
+				}
+				sent++
+				return json.RawMessage(`[1,2]`), nil
+			}})
+		return toolkittest.Fixture{Registry: r, State: func() any { return sent }}
+	}
+	toolkittest.Run(t, toolkittest.Suite{
+		New: newFixture,
+		Cases: map[string]toolkittest.Case{
+			"doc.array":  {Args: []string{"doc", "array"}},
+			"doc.string": {Args: []string{"doc", "string"}},
+			"doc.null":   {Args: []string{"doc", "null"}},
+			"doc.object": {Args: []string{"doc", "object"}},
+			"raw":        {Input: map[string]any{"id": "a"}, Args: []string{"passthrough", "--id", "a"}},
+		},
+	})
 }

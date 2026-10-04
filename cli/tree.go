@@ -101,6 +101,9 @@ func build(reg *op.Registry, opts Options) (*app, error) {
 	if err := checkDefaults(root); err != nil {
 		return nil, err
 	}
+	if err := checkRootAliases(root, opts.Commands); err != nil {
+		return nil, err
+	}
 	for _, c := range root.children {
 		typ, err := a.buildType(c, nil)
 		if err != nil {
@@ -110,7 +113,7 @@ func build(reg *op.Registry, opts Options) (*app, error) {
 		if err := a.collect(c, v.Elem(), []string{c.word}, nil); err != nil {
 			return nil, err
 		}
-		a.options = append(a.options, kong.DynamicCommand(c.word, nodeHelp(c), "Operations", v.Interface()))
+		a.options = append(a.options, kong.DynamicCommand(c.word, nodeHelp(c), "Operations", v.Interface(), aliasTag(c)))
 	}
 	for _, cmd := range opts.Commands {
 		a.options = append(a.options, kong.DynamicCommand(cmd.Name, cmd.Help, "Commands", cmd.Cmd))
@@ -199,6 +202,25 @@ func checkDefaults(n *node) error {
 	}
 	if len(defaults) == 1 && arg != "" {
 		return fmt.Errorf("%s is a default command next to the placeholder %s", defaults[0], arg)
+	}
+	return nil
+}
+
+// checkRootAliases rejects an alias of a root command that equals the name
+// of a hand-written command, which kong would not report. The registry
+// already keeps aliases apart from other operations' words.
+func checkRootAliases(root *node, cmds []Command) error {
+	for _, c := range root.children {
+		if c.entry == nil {
+			continue
+		}
+		for _, alias := range c.entry.Aliases {
+			for _, cmd := range cmds {
+				if cmd.Name == alias {
+					return fmt.Errorf("%s: alias %q is also the name of a command", c.entry.Name, alias)
+				}
+			}
+		}
 	}
 	return nil
 }
@@ -333,9 +355,18 @@ func (a *app) buildType(n *node, bound map[string]bool) (reflect.Type, error) {
 		if c.entry != nil && c.entry.DefaultCommand {
 			tag += ` default:"withargs" hidden:""`
 		}
+		tag += aliasTag(c)
 		fields = append(fields, reflect.StructField{Name: fmt.Sprintf("C%d", i), Type: t, Tag: reflect.StructTag(tag)})
 	}
 	return reflect.StructOf(fields), nil
+}
+
+// aliasTag is the kong tag of an operation's aliases, or "".
+func aliasTag(n *node) string {
+	if n.entry == nil || len(n.entry.Aliases) == 0 {
+		return ""
+	}
+	return fmt.Sprintf(` aliases:%q`, strings.Join(n.entry.Aliases, ","))
 }
 
 // collect records where each leaf's generated values live, so a parsed

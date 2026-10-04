@@ -45,12 +45,30 @@ field is declared once.
   default subcommand of its parent: `items list` also runs as `items`, and
   `item <id> show` as `item <id>`. The word keeps working and is hidden from
   help. Tools that grew such commands under kong keep their spelling.
+- **Aliases.** `Aliases: []string{"s"}` gives the last CLI word extra kong
+  aliases, so `search <query>` also runs as `s <query>`. They are CLI-only:
+  HTTP routes, MCP names and the operation name are unchanged. The registry
+  rejects an alias that collides with another command's path, and the
+  metadata lists them in an optional `aliases` field.
 - **Root flags.** A tool can declare root flags (for example `--limit` or
   `--account`) whose json tag names an input field. They fill that field in
   every operation that has it, so `tool --limit 5 notes list` and
   `tool notes list --limit 5` are the same call.
 - **Output.** `--json` or `--agent` prints JSON. Otherwise the CLI uses the
   operation's `Render` hook if it has one, and JSON if not.
+- **Warnings.** An operation that carries warnings in its result can declare
+  `Warnings: func(out Out) []string`. In human output the CLI prints each to
+  stderr as `warning: <text>` before the result (or the error, for an error
+  result). `--json`, `--agent`, HTTP and MCP print nothing extra: callers read
+  the warnings in the result.
+- **Any JSON output.** An operation whose output is `any` or
+  `json.RawMessage` (a raw API passthrough, say) may return any JSON value.
+  Its output schema lists every JSON type,
+  `{"type": ["object", "array", "string", "number", "boolean", "null"]}`, and
+  a `json.RawMessage` field gets the same schema at any depth. HTTP returns
+  the value as the body. MCP structured content must be an object, so such a
+  tool has no `outputSchema` and its result is the JSON text alone. An output
+  of `map[string]any` is always an object and keeps structured content.
 - **Errors.** Handlers return `*op.Error` with a kind. The kind maps to the
   exit code, the HTTP status and an MCP `isError` result, each carrying the
   same `{code, message, suggestions}` payload. An error may carry the output
