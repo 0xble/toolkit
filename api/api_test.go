@@ -94,3 +94,18 @@ func TestUnknownRouteIsJSON(t *testing.T) {
 		}
 	}
 }
+
+func TestErrorBodyCarriesTheResult(t *testing.T) {
+	r := op.New("t", "v")
+	op.Add(r, op.Op[in, out]{Name: "thing.make", Effect: op.Read, Handler: func(context.Context, op.Request, in) (out, error) {
+		return out{}, &op.Error{Kind: op.KindPartial, Code: "stopped", Message: "stopped", Result: out{Applied: true}}
+	}})
+	code, body := call(t, api.Handler(r, api.Options{}), `{"name":"x"}`)
+	if code != 207 || strings.TrimSpace(body) != `{"error":{"code":"stopped","message":"stopped"},"result":{"applied":true}}` {
+		t.Errorf("partial result: %d %s", code, body)
+	}
+	code, body = call(t, api.Handler(registry(), api.Options{}), `{"name":1}`)
+	if code != 400 || strings.Contains(body, "result") {
+		t.Errorf("an error without a result has no result key: %d %s", code, body)
+	}
+}

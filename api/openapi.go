@@ -55,7 +55,9 @@ func errorSchema() *jsonschema.Schema {
 	return &jsonschema.Schema{
 		Type:     "object",
 		Required: []string{"error"},
-		Properties: map[string]*jsonschema.Schema{"error": {
+		Properties: map[string]*jsonschema.Schema{"result": {
+			Description: "Output the operation produced before it failed, in its output schema",
+		}, "error": {
 			Type:     "object",
 			Required: []string{"code", "message"},
 			Properties: map[string]*jsonschema.Schema{

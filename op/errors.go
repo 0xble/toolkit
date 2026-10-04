@@ -65,6 +65,12 @@ type Error struct {
 	Code        string   `json:"code"`
 	Message     string   `json:"message"`
 	Suggestions []string `json:"suggestions,omitempty"`
+	// Result is output the operation produced before it failed, such as the
+	// per-item report of a batch that stopped part way. It must have the
+	// operation's output type. Every surface returns it with the error: the
+	// CLI prints it to stdout (rendered or as JSON) and the error to stderr,
+	// and HTTP and MCP add it to the error body as "result".
+	Result any `json:"-"`
 }
 
 func (e *Error) Error() string { return e.Message }

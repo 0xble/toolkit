@@ -98,6 +98,9 @@ func build(reg *op.Registry, opts Options) (*app, error) {
 		}
 		cur.entry = e
 	}
+	if err := checkDefaults(root); err != nil {
+		return nil, err
+	}
 	for _, c := range root.children {
 		typ, err := a.buildType(c, nil)
 		if err != nil {
@@ -154,11 +157,50 @@ func (a *app) bindGlobalFlags(k *kong.Kong) error {
 	return nil
 }
 
+// nodeHelp is an operation's summary, or for a group with a default
+// command, that command's summary.
 func nodeHelp(n *node) string {
 	if n.entry != nil {
 		return n.entry.Summary
 	}
+	if d := defaultChild(n); d != nil {
+		return d.entry.Summary
+	}
 	return ""
+}
+
+func defaultChild(n *node) *node {
+	for _, c := range n.children {
+		if c.entry != nil && c.entry.DefaultCommand {
+			return c
+		}
+	}
+	return nil
+}
+
+// checkDefaults allows at most one default command per parent, and none next
+// to a placeholder, where kong could not tell a subcommand from an argument.
+func checkDefaults(n *node) error {
+	var defaults []string
+	arg := ""
+	for _, c := range n.children {
+		if c.entry != nil && c.entry.DefaultCommand {
+			defaults = append(defaults, c.entry.Name)
+		}
+		if c.arg != "" {
+			arg = c.word
+		}
+		if err := checkDefaults(c); err != nil {
+			return err
+		}
+	}
+	if len(defaults) > 1 {
+		return fmt.Errorf("%s are all default commands of the same parent", strings.Join(defaults, " and "))
+	}
+	if len(defaults) == 1 && arg != "" {
+		return fmt.Errorf("%s is a default command next to the placeholder %s", defaults[0], arg)
+	}
+	return nil
 }
 
 func (a *app) globalFor(name string) *global {
@@ -287,8 +329,11 @@ func (a *app) buildType(n *node, bound map[string]bool) (reflect.Type, error) {
 		if err != nil {
 			return nil, err
 		}
-		fields = append(fields, reflect.StructField{Name: fmt.Sprintf("C%d", i), Type: t,
-			Tag: reflect.StructTag(fmt.Sprintf(`cmd:"" name:%q help:%q json:"-"`, c.word, nodeHelp(c)))})
+		tag := fmt.Sprintf(`cmd:"" name:%q help:%q json:"-"`, c.word, nodeHelp(c))
+		if c.entry != nil && c.entry.DefaultCommand {
+			tag += ` default:"withargs" hidden:""`
+		}
+		fields = append(fields, reflect.StructField{Name: fmt.Sprintf("C%d", i), Type: t, Tag: reflect.StructTag(tag)})
 	}
 	return reflect.StructOf(fields), nil
 }

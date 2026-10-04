@@ -73,15 +73,17 @@ func Handler(reg *op.Registry, opts Options) http.Handler {
 	return mux
 }
 
-// ErrorBody is the JSON body of a failed call.
+// ErrorBody is the JSON body of a failed call. Result is the operation's
+// partial output when the error carries one (op.Error.Result).
 type ErrorBody struct {
-	Error *op.Error `json:"error"`
+	Error  *op.Error `json:"error"`
+	Result any       `json:"result,omitempty"`
 }
 
 // WriteError writes err as an ErrorBody with the status of its kind.
 func WriteError(w http.ResponseWriter, err error) {
 	oe := op.AsError(err, op.KindError)
-	writeJSON(w, oe.Kind.HTTPStatus(), ErrorBody{Error: oe})
+	writeJSON(w, oe.Kind.HTTPStatus(), ErrorBody{Error: oe, Result: oe.Result})
 }
 
 func writeJSON(w http.ResponseWriter, status int, v any) {

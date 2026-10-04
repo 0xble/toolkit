@@ -7,6 +7,7 @@ package op
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -72,6 +73,11 @@ type Op[In, Out any] struct {
 	Effect  Effect
 	// MCP exposes the operation as an MCP tool.
 	MCP bool
+	// DefaultCommand makes the last CLI word the default subcommand of its
+	// parent, so "workflow <id> show" also runs as "workflow <id>", and
+	// "items list" as "items". The word still works and is hidden from help.
+	// At most one operation may be the default under a parent.
+	DefaultCommand bool
 	// Handler implements the operation. For write and destructive operations
 	// it must not change state unless req.Apply is true.
 	Handler func(ctx context.Context, req Request, in In) (Out, error)
@@ -87,7 +93,9 @@ type Entry struct {
 	Summary string
 	Effect  Effect
 	MCP     bool
-	In, Out reflect.Type
+	// DefaultCommand is Op.DefaultCommand.
+	DefaultCommand bool
+	In, Out        reflect.Type
 
 	call     func(ctx context.Context, req Request, in any) (any, error)
 	render   func(w io.Writer, out any) error
@@ -147,7 +155,7 @@ func newEntry[In, Out any](r *Registry, o Op[In, Out]) (*Entry, error) {
 	if o.Handler == nil {
 		return nil, fmt.Errorf("handler is nil")
 	}
-	e := &Entry{Name: o.Name, Summary: o.Summary, Effect: o.Effect, MCP: o.MCP,
+	e := &Entry{Name: o.Name, Summary: o.Summary, Effect: o.Effect, MCP: o.MCP, DefaultCommand: o.DefaultCommand,
 		In: reflect.TypeFor[In](), Out: reflect.TypeFor[Out]()}
 	if e.In.Kind() != reflect.Struct {
 		return nil, fmt.Errorf("input must be a struct, got %s", e.In)
@@ -159,6 +167,9 @@ func newEntry[In, Out any](r *Registry, o Op[In, Out]) (*Entry, error) {
 	e.CLIPath = strings.Fields(path)
 	if err := checkPath(r, e); err != nil {
 		return nil, err
+	}
+	if e.DefaultCommand && len(e.CLIPath) < 2 {
+		return nil, fmt.Errorf("a default command needs a parent: its CLI path must have at least two words")
 	}
 	fields := jsonFields(e.In)
 	for _, reserved := range []string{FieldApply, FieldConfirm} {
@@ -193,7 +204,14 @@ func newEntry[In, Out any](r *Registry, o Op[In, Out]) (*Entry, error) {
 		if !ok {
 			return nil, fmt.Errorf("op %s: input is %T, want *%s", o.Name, in, e.In)
 		}
-		return o.Handler(ctx, req, *v)
+		out, err := o.Handler(ctx, req, *v)
+		var oe *Error
+		if errors.As(err, &oe) && oe.Result != nil {
+			if _, ok := oe.Result.(Out); !ok {
+				return nil, fmt.Errorf("op %s: error result is %T, want %s", o.Name, oe.Result, e.Out)
+			}
+		}
+		return out, err
 	}
 	if o.Render != nil {
 		e.render = func(w io.Writer, out any) error {
