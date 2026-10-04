@@ -126,3 +126,22 @@ func TestAnyJSONOutput(t *testing.T) {
 		t.Errorf("OpenAPI response schema is not the any-JSON schema: %s", w.Body)
 	}
 }
+
+func TestAliasesAreNotRoutes(t *testing.T) {
+	r := op.New("t", "v")
+	op.Add(r, op.Op[in, out]{Name: "thing.make", Effect: op.Read, Aliases: []string{"mk"}, Handler: func(context.Context, op.Request, in) (out, error) {
+		return out{}, nil
+	}})
+	h := api.Handler(r, api.Options{})
+	w := httptest.NewRecorder()
+	h.ServeHTTP(w, httptest.NewRequest(http.MethodPost, "/ops/thing.mk", strings.NewReader(`{"name":"x"}`)))
+	if w.Code != 404 {
+		t.Errorf("an alias is not an HTTP route: %d %s", w.Code, w.Body)
+	}
+	w = httptest.NewRecorder()
+	h.ServeHTTP(w, httptest.NewRequest(http.MethodGet, "/openapi.json", nil))
+	toolkittest.CheckOpenAPI(t, r, w.Body.Bytes())
+	if strings.Contains(w.Body.String(), "mk") {
+		t.Errorf("the OpenAPI document mentions the alias: %s", w.Body)
+	}
+}

@@ -2,6 +2,7 @@ package op
 
 import (
 	_ "embed"
+	"slices"
 
 	"github.com/google/jsonschema-go/jsonschema"
 )
@@ -27,8 +28,10 @@ type Metadata struct {
 
 // OperationInfo describes one operation in the metadata document.
 type OperationInfo struct {
-	Name    string             `json:"name"`
-	CLI     string             `json:"cli"`
+	Name string `json:"name"`
+	CLI  string `json:"cli"`
+	// Aliases are the CLI aliases of the last CLI word, when there are any.
+	Aliases []string           `json:"aliases,omitempty"`
 	Summary string             `json:"summary"`
 	Effect  Effect             `json:"effect"`
 	MCP     bool               `json:"mcp"`
@@ -42,7 +45,7 @@ func (r *Registry) Metadata() Metadata {
 	m := Metadata{Schema: MetadataSchemaID, Tool: r.Tool, Version: r.Version, Operations: []OperationInfo{}}
 	for _, e := range r.Entries() {
 		m.Operations = append(m.Operations, OperationInfo{
-			Name: e.Name, CLI: e.CLI(), Summary: e.Summary, Effect: e.Effect,
+			Name: e.Name, CLI: e.CLI(), Aliases: slices.Clone(e.Aliases), Summary: e.Summary, Effect: e.Effect,
 			MCP: e.MCP, MCPName: e.MCPName(), Input: e.InputSchema(), Output: e.OutputSchema(),
 		})
 	}

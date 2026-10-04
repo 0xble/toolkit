@@ -45,6 +45,11 @@ field is declared once.
   default subcommand of its parent: `items list` also runs as `items`, and
   `item <id> show` as `item <id>`. The word keeps working and is hidden from
   help. Tools that grew such commands under kong keep their spelling.
+- **Aliases.** `Aliases: []string{"s"}` gives the last CLI word extra kong
+  aliases, so `search <query>` also runs as `s <query>`. They are CLI-only:
+  HTTP routes, MCP names and the operation name are unchanged. The registry
+  rejects an alias that collides with another command's path, and the
+  metadata lists them in an optional `aliases` field.
 - **Root flags.** A tool can declare root flags (for example `--limit` or
   `--account`) whose json tag names an input field. They fill that field in
   every operation that has it, so `tool --limit 5 notes list` and

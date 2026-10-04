@@ -119,3 +119,17 @@ func TestAnyJSONOutputIsTextOnly(t *testing.T) {
 		}
 	}
 }
+
+func TestAliasesAreNotTools(t *testing.T) {
+	r := op.New("t", "v")
+	op.Add(r, op.Op[empty, obj]{Name: "obj.get", Effect: op.Read, MCP: true, Aliases: []string{"g"}, Handler: func(context.Context, op.Request, empty) (obj, error) {
+		return obj{}, nil
+	}})
+	tools, err := toolkittest.MCPClient(t, r, nil).ListTools(context.Background(), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(tools.Tools) != 1 || tools.Tools[0].Name != "obj_get" {
+		t.Errorf("tools: %+v", tools.Tools)
+	}
+}
