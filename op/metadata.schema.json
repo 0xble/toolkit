@@ -1,0 +1,31 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/0xble/toolkit/op/metadata.schema.json",
+  "title": "toolkit.metadata.v1",
+  "type": "object",
+  "required": ["schema", "tool", "version", "operations"],
+  "additionalProperties": false,
+  "properties": {
+    "schema": {"const": "toolkit.metadata.v1"},
+    "tool": {"type": "string", "minLength": 1},
+    "version": {"type": "string"},
+    "operations": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["name", "cli", "summary", "effect", "mcp", "mcp_name", "input", "output"],
+        "additionalProperties": false,
+        "properties": {
+          "name": {"type": "string", "pattern": "^[a-z][a-z0-9_]*(\\.[a-z][a-z0-9_]*)*$"},
+          "cli": {"type": "string", "minLength": 1},
+          "summary": {"type": "string"},
+          "effect": {"enum": ["read", "write", "destructive"]},
+          "mcp": {"type": "boolean"},
+          "mcp_name": {"type": "string", "pattern": "^[a-z][a-z0-9_]*$"},
+          "input": {"type": "object"},
+          "output": {"type": "object"}
+        }
+      }
+    }
+  }
+}

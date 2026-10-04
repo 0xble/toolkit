@@ -1,0 +1,383 @@
+// Package op is the operation registry. A tool declares each operation once,
+// with typed input and output structs, an effect and a handler. The CLI, HTTP
+// API, OpenAPI document, MCP tools and metadata are all derived from that one
+// declaration, and every surface calls the same Entry.Call.
+package op
+
+import (
+	"context"
+	"encoding/json"
+	"fmt"
+	"io"
+	"net/http"
+	"reflect"
+	"regexp"
+	"sort"
+	"strings"
+
+	"github.com/google/jsonschema-go/jsonschema"
+)
+
+// Effect classifies what an operation does to the outside world.
+type Effect string
+
+const (
+	// Read operations never change state.
+	Read Effect = "read"
+	// Write operations change state. They preview unless the caller sets apply.
+	Write Effect = "write"
+	// Destructive operations change state in a way that is hard to undo. They
+	// preview unless the caller sets apply, and apply also requires confirm.
+	Destructive Effect = "destructive"
+)
+
+// Mutates reports whether the effect can change state.
+func (e Effect) Mutates() bool { return e == Write || e == Destructive }
+
+// Surface names the adapter a call arrived through.
+type Surface string
+
+const (
+	SurfaceCLI  Surface = "cli"
+	SurfaceHTTP Surface = "http"
+	SurfaceMCP  Surface = "mcp"
+)
+
+// Request carries the call-level controls every surface supplies alongside
+// the typed input.
+type Request struct {
+	Surface Surface
+	// Apply asks a write or destructive operation to perform the change.
+	// Without it the handler must only preview. Always false for reads.
+	Apply bool
+	// Confirm is the caller's explicit confirmation of a destructive apply.
+	Confirm bool
+	// HTTP is the inbound request on the HTTP and HTTP-MCP surfaces, for
+	// authorizers that read transport identity. Nil on the CLI and stdio MCP.
+	HTTP *http.Request
+}
+
+// Op declares one operation. In and Out are structs (Out may be any JSON
+// value type). Input field tags carry both the wire shape (json) and the CLI
+// shape (kong: arg, name, short, help, default).
+type Op[In, Out any] struct {
+	// Name is the canonical dotted name, e.g. "note.delete".
+	Name string
+	// CLI is the command path, e.g. "note <id> delete". A word in angle
+	// brackets is a positional argument owned by the parent command and fills
+	// the string input field with that json name. Empty means Name with dots
+	// replaced by spaces.
+	CLI     string
+	Summary string
+	Effect  Effect
+	// MCP exposes the operation as an MCP tool.
+	MCP bool
+	// Handler implements the operation. For write and destructive operations
+	// it must not change state unless req.Apply is true.
+	Handler func(ctx context.Context, req Request, in In) (Out, error)
+	// Render optionally prints a human summary of the result. Without it the
+	// CLI prints JSON.
+	Render func(w io.Writer, out Out) error
+}
+
+// Entry is the type-erased view of an operation that surfaces use.
+type Entry struct {
+	Name    string
+	CLIPath []string
+	Summary string
+	Effect  Effect
+	MCP     bool
+	In, Out reflect.Type
+
+	call     func(ctx context.Context, req Request, in any) (any, error)
+	render   func(w io.Writer, out any) error
+	inSchema *jsonschema.Schema
+	wire     *jsonschema.Schema
+	resolved *jsonschema.Resolved
+	out      *jsonschema.Schema
+}
+
+// Registry is one tool's operations.
+type Registry struct {
+	Tool    string
+	Version string
+	entries map[string]*Entry
+	paths   map[string]string
+}
+
+// New returns an empty registry.
+func New(tool, version string) *Registry {
+	return &Registry{Tool: tool, Version: version, entries: map[string]*Entry{}, paths: map[string]string{}}
+}
+
+var (
+	nameRE        = regexp.MustCompile(`^[a-z][a-z0-9_]*(\.[a-z][a-z0-9_]*)*$`)
+	wordRE        = regexp.MustCompile(`^[a-z][a-z0-9-]*$`)
+	placeholderRE = regexp.MustCompile(`^<([a-z][a-z0-9_]*)>$`)
+)
+
+// Reserved wire fields the registry adds to inputs.
+const (
+	FieldApply   = "apply"
+	FieldConfirm = "confirm"
+)
+
+// Add registers an operation. It panics on an invalid declaration, since
+// that is a programming error found the first time the tool starts.
+func Add[In, Out any](r *Registry, o Op[In, Out]) {
+	e, err := newEntry(r, o)
+	if err != nil {
+		panic(fmt.Sprintf("op %q: %v", o.Name, err))
+	}
+	r.entries[e.Name] = e
+}
+
+func newEntry[In, Out any](r *Registry, o Op[In, Out]) (*Entry, error) {
+	if !nameRE.MatchString(o.Name) {
+		return nil, fmt.Errorf("name must be lowercase dotted words")
+	}
+	if _, dup := r.entries[o.Name]; dup {
+		return nil, fmt.Errorf("registered twice")
+	}
+	switch o.Effect {
+	case Read, Write, Destructive:
+	default:
+		return nil, fmt.Errorf("effect must be read, write or destructive")
+	}
+	if o.Handler == nil {
+		return nil, fmt.Errorf("handler is nil")
+	}
+	e := &Entry{Name: o.Name, Summary: o.Summary, Effect: o.Effect, MCP: o.MCP,
+		In: reflect.TypeFor[In](), Out: reflect.TypeFor[Out]()}
+	if e.In.Kind() != reflect.Struct {
+		return nil, fmt.Errorf("input must be a struct, got %s", e.In)
+	}
+	path := o.CLI
+	if path == "" {
+		path = strings.ReplaceAll(o.Name, ".", " ")
+	}
+	e.CLIPath = strings.Fields(path)
+	if err := checkPath(r, e); err != nil {
+		return nil, err
+	}
+	fields := jsonFields(e.In)
+	for _, reserved := range []string{FieldApply, FieldConfirm} {
+		if _, ok := fields[reserved]; ok {
+			return nil, fmt.Errorf("input field %q is reserved", reserved)
+		}
+	}
+	for _, w := range e.CLIPath {
+		if m := placeholderRE.FindStringSubmatch(w); m != nil {
+			f, ok := fields[m[1]]
+			if !ok || f.Type.Kind() != reflect.String {
+				return nil, fmt.Errorf("placeholder %s needs a string input field with json name %q", w, m[1])
+			}
+		}
+	}
+	var err error
+	if e.inSchema, err = schemaFor(e.In); err != nil {
+		return nil, fmt.Errorf("input schema: %w", err)
+	}
+	if e.out, err = schemaFor(e.Out); err != nil {
+		return nil, fmt.Errorf("output schema: %w", err)
+	}
+	e.wire = e.buildWireSchema()
+	if e.resolved, err = e.wire.Resolve(nil); err != nil {
+		return nil, fmt.Errorf("resolve input schema: %w", err)
+	}
+	if _, err := newInput(e.In); err != nil {
+		return nil, err
+	}
+	e.call = func(ctx context.Context, req Request, in any) (any, error) {
+		v, ok := in.(*In)
+		if !ok {
+			return nil, fmt.Errorf("op %s: input is %T, want *%s", o.Name, in, e.In)
+		}
+		return o.Handler(ctx, req, *v)
+	}
+	if o.Render != nil {
+		e.render = func(w io.Writer, out any) error {
+			v, ok := out.(Out)
+			if !ok {
+				return fmt.Errorf("op %s: output is %T, want %s", o.Name, out, e.Out)
+			}
+			return o.Render(w, v)
+		}
+	}
+	return e, nil
+}
+
+// checkPath validates the CLI words and rejects paths that would collide in
+// the command tree: identical paths, paths equal after placeholders are
+// removed, and a path that is a prefix of another (a command cannot be both
+// runnable and a group).
+func checkPath(r *Registry, e *Entry) error {
+	if len(e.CLIPath) == 0 || placeholderRE.MatchString(e.CLIPath[0]) {
+		return fmt.Errorf("CLI path must start with a command word")
+	}
+	last := e.CLIPath[len(e.CLIPath)-1]
+	if placeholderRE.MatchString(last) {
+		return fmt.Errorf("CLI path must end with a command word; use an arg:\"\" input field for a trailing positional")
+	}
+	for _, w := range e.CLIPath {
+		if !wordRE.MatchString(w) && !placeholderRE.MatchString(w) {
+			return fmt.Errorf("invalid CLI word %q", w)
+		}
+	}
+	key := strings.Join(commandWords(e.CLIPath), " ")
+	if other, ok := r.paths[key]; ok {
+		return fmt.Errorf("CLI path collides with %s", other)
+	}
+	for k, other := range r.paths {
+		if strings.HasPrefix(k+" ", key+" ") || strings.HasPrefix(key+" ", k+" ") {
+			return fmt.Errorf("CLI path %q and %s's path are prefixes of each other", key, other)
+		}
+	}
+	r.paths[key] = e.Name
+	return nil
+}
+
+func commandWords(p []string) []string {
+	var out []string
+	for _, w := range p {
+		if !placeholderRE.MatchString(w) {
+			out = append(out, w)
+		}
+	}
+	return out
+}
+
+// CommandKey is the CLI path without placeholders, e.g. "note delete".
+func (e *Entry) CommandKey() string { return strings.Join(commandWords(e.CLIPath), " ") }
+
+// Entries returns operations sorted by name.
+func (r *Registry) Entries() []*Entry {
+	out := make([]*Entry, 0, len(r.entries))
+	for _, e := range r.entries {
+		out = append(out, e)
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].Name < out[j].Name })
+	return out
+}
+
+// Lookup finds an operation by canonical name.
+func (r *Registry) Lookup(name string) *Entry { return r.entries[name] }
+
+// MCPName is the MCP tool name and OpenAPI operationId. Dots are not valid
+// in every model provider's function-name grammar, so they become underscores.
+func (e *Entry) MCPName() string { return strings.ReplaceAll(e.Name, ".", "_") }
+
+// InputSchema is the JSON Schema of the wire input, including the standard
+// apply and confirm controls. The caller gets a copy.
+func (e *Entry) InputSchema() *jsonschema.Schema { return cloneSchema(e.wire) }
+
+// OutputSchema is the JSON Schema of the result. The caller gets a copy.
+func (e *Entry) OutputSchema() *jsonschema.Schema { return cloneSchema(e.out) }
+
+// CanRender reports whether the operation has a human render hook.
+func (e *Entry) CanRender() bool { return e.render != nil }
+
+// Render prints the human form of out. It errors when there is no hook.
+func (e *Entry) Render(w io.Writer, out any) error {
+	if e.render == nil {
+		return fmt.Errorf("op %s has no render hook", e.Name)
+	}
+	return e.render(w, out)
+}
+
+func (e *Entry) buildWireSchema() *jsonschema.Schema {
+	s := cloneSchema(e.inSchema)
+	if !e.Effect.Mutates() {
+		return s
+	}
+	if s.Properties == nil {
+		s.Properties = map[string]*jsonschema.Schema{}
+	}
+	s.Properties[FieldApply] = &jsonschema.Schema{Type: "boolean",
+		Description: "Perform the change. Without it the operation only previews."}
+	if e.Effect == Destructive {
+		s.Properties[FieldConfirm] = &jsonschema.Schema{Type: "boolean",
+			Description: "Must be true together with apply: this operation is destructive. Previews do not need it."}
+	}
+	return s
+}
+
+// NewInput returns a pointer to a fresh input with kong default tags applied.
+func (e *Entry) NewInput() any {
+	v, _ := newInput(e.In) // checked at Add
+	return v
+}
+
+// Decode builds a typed input from wire JSON after validating it against the
+// input schema. It returns the input pointer and the apply and confirm
+// controls, which are removed from the object before decoding.
+func (e *Entry) Decode(raw json.RawMessage) (in any, apply, confirm bool, err error) {
+	if len(strings.TrimSpace(string(raw))) == 0 {
+		raw = json.RawMessage("{}")
+	}
+	var generic map[string]any
+	if err := json.Unmarshal(raw, &generic); err != nil || generic == nil {
+		return nil, false, false, Errorf(KindUsage, "invalid_input", "input must be a JSON object")
+	}
+	if err := e.resolved.Validate(generic); err != nil {
+		return nil, false, false, Errorf(KindUsage, "invalid_input", "%s", err.Error())
+	}
+	apply, _ = generic[FieldApply].(bool)
+	confirm, _ = generic[FieldConfirm].(bool)
+	delete(generic, FieldApply)
+	delete(generic, FieldConfirm)
+	clean, err := json.Marshal(generic)
+	if err != nil {
+		return nil, false, false, err
+	}
+	in = e.NewInput()
+	dec := json.NewDecoder(strings.NewReader(string(clean)))
+	dec.DisallowUnknownFields()
+	if err := dec.Decode(in); err != nil {
+		return nil, false, false, Errorf(KindUsage, "invalid_input", "%s", err.Error())
+	}
+	return in, apply, confirm, nil
+}
+
+// Call runs the handler. The apply and confirm rules are enforced here, once,
+// for every surface: reads never apply, and a destructive apply without
+// confirmation is refused before the handler runs.
+func (e *Entry) Call(ctx context.Context, req Request, in any) (any, error) {
+	if !e.Effect.Mutates() {
+		req.Apply, req.Confirm = false, false
+	}
+	if err := e.checkConfirm(req); err != nil {
+		return nil, err
+	}
+	return e.call(ctx, req, in)
+}
+
+func (e *Entry) checkConfirm(req Request) error {
+	if e.Effect == Destructive && req.Apply && !req.Confirm {
+		return &Error{Kind: KindUsage, Code: "confirmation_required",
+			Message:     e.Name + " is destructive and needs explicit confirmation to apply",
+			Suggestions: []string{"CLI: add --yes or answer the prompt", "API and MCP: send \"confirm\": true with \"apply\": true"}}
+	}
+	return nil
+}
+
+// CallJSON is the remote path used by HTTP and MCP: decode and validate the
+// wire input, enforce confirmation, authorize, then Call. A nil authorizer
+// means DenyWrites.
+func (e *Entry) CallJSON(ctx context.Context, req Request, raw json.RawMessage, auth Authorizer) (any, error) {
+	in, apply, confirm, err := e.Decode(raw)
+	if err != nil {
+		return nil, err
+	}
+	req.Apply, req.Confirm = apply && e.Effect.Mutates(), confirm && e.Effect == Destructive
+	if err := e.checkConfirm(req); err != nil {
+		return nil, err
+	}
+	if auth == nil {
+		auth = DenyWrites
+	}
+	if err := auth.Authorize(ctx, e, req); err != nil {
+		return nil, AsError(err, KindAuth)
+	}
+	return e.Call(ctx, req, in)
+}
