@@ -193,8 +193,16 @@ func (a *app) runOp(ctx context.Context, kctx *kong.Context, l *leaf, opts Optio
 }
 
 // print writes an operation's output to stdout: the render hook for human
-// output, otherwise JSON filtered by --fields.
+// output, otherwise JSON filtered by --fields. Human output first prints the
+// result's warnings to stderr.
 func (a *app) print(e *op.Entry, out any, opts Options, format output.Format) error {
+	if format != output.FormatJSON {
+		for _, w := range e.Warnings(out) {
+			if _, err := fmt.Fprintf(opts.Stderr, "warning: %s\n", w); err != nil {
+				return err
+			}
+		}
+	}
 	if format != output.FormatJSON && e.CanRender() {
 		return e.Render(opts.Stdout, out)
 	}

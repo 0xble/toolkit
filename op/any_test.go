@@ -98,3 +98,18 @@ func TestRenderAcceptsANilAnyOutput(t *testing.T) {
 		t.Errorf("rendered %q", buf.String())
 	}
 }
+
+func TestWarningsHook(t *testing.T) {
+	r := op.New("t", "v")
+	op.Add(r, op.Op[struct{}, any]{Name: "doc", Effect: op.Read,
+		Handler:  func(context.Context, op.Request, struct{}) (any, error) { return nil, nil },
+		Warnings: func(v any) []string { return []string{fmt.Sprint(v)} }})
+	op.Add(r, op.Op[struct{}, res]{Name: "plain", Effect: op.Read,
+		Handler: func(context.Context, op.Request, struct{}) (res, error) { return res{}, nil }})
+	if w := r.Lookup("doc").Warnings(nil); len(w) != 1 || w[0] != "<nil>" {
+		t.Errorf("warnings of a nil any output: %v", w)
+	}
+	if w := r.Lookup("plain").Warnings(res{}); w != nil {
+		t.Errorf("an operation without the hook has no warnings: %v", w)
+	}
+}

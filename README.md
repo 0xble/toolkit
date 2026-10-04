@@ -56,6 +56,11 @@ field is declared once.
   `tool notes list --limit 5` are the same call.
 - **Output.** `--json` or `--agent` prints JSON. Otherwise the CLI uses the
   operation's `Render` hook if it has one, and JSON if not.
+- **Warnings.** An operation that carries warnings in its result can declare
+  `Warnings: func(out Out) []string`. In human output the CLI prints each to
+  stderr as `warning: <text>` before the result (or the error, for an error
+  result). `--json`, `--agent`, HTTP and MCP print nothing extra: callers read
+  the warnings in the result.
 - **Any JSON output.** An operation whose output is `any` or
   `json.RawMessage` (a raw API passthrough, say) may return any JSON value.
   Its output schema lists every JSON type,
