@@ -81,13 +81,16 @@ func result(e *op.Entry, out any) (*sdk.CallToolResult, error) {
 	return r, nil
 }
 
-// ErrorBody is the text payload of an isError result.
+// ErrorBody is the text payload of an isError result. Result is the
+// operation's partial output when the error carries one (op.Error.Result).
 type ErrorBody struct {
-	Error *op.Error `json:"error"`
+	Error  *op.Error `json:"error"`
+	Result any       `json:"result,omitempty"`
 }
 
 func errorResult(err error) *sdk.CallToolResult {
-	b, _ := json.Marshal(ErrorBody{Error: op.AsError(err, op.KindError)})
+	oe := op.AsError(err, op.KindError)
+	b, _ := json.Marshal(ErrorBody{Error: oe, Result: oe.Result})
 	return &sdk.CallToolResult{IsError: true, Content: []sdk.Content{&sdk.TextContent{Text: string(b)}}}
 }
 

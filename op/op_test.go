@@ -224,3 +224,26 @@ func TestDenyWrites(t *testing.T) {
 		t.Errorf("read: %v", err)
 	}
 }
+
+func TestDefaultCommandNeedsAParent(t *testing.T) {
+	defer func() {
+		if r := recover(); r == nil || !strings.Contains(fmt.Sprint(r), "parent") {
+			t.Errorf("a one-word default command must be rejected: %v", r)
+		}
+	}()
+	op.Add(op.New("t", "v"), op.Op[struct{}, int]{Name: "solo", Effect: op.Read, DefaultCommand: true,
+		Handler: func(context.Context, op.Request, struct{}) (int, error) { return 0, nil }})
+}
+
+func TestErrorResultMustHaveTheOutputType(t *testing.T) {
+	r := op.New("t", "v")
+	op.Add(r, op.Op[struct{}, int]{Name: "bad", Effect: op.Read,
+		Handler: func(context.Context, op.Request, struct{}) (int, error) {
+			return 0, &op.Error{Kind: op.KindPartial, Code: "p", Message: "p", Result: "not an int"}
+		}})
+	e := r.Lookup("bad")
+	_, err := e.Call(context.Background(), op.Request{}, e.NewInput())
+	if err == nil || !strings.Contains(err.Error(), "error result is string") {
+		t.Errorf("err = %v", err)
+	}
+}

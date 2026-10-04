@@ -178,24 +178,34 @@ func (a *app) runOp(ctx context.Context, kctx *kong.Context, l *leaf, opts Optio
 	}
 	out, err := e.Call(ctx, req, in)
 	if err != nil {
+		var oe *op.Error
+		if errors.As(err, &oe) && oe.Result != nil {
+			if perr := a.print(e, oe.Result, opts, format); perr != nil {
+				return writeErr(opts.Stderr, format, perr)
+			}
+		}
 		return writeErr(opts.Stderr, format, err)
 	}
-	if format != output.FormatJSON && e.CanRender() {
-		if err := e.Render(opts.Stdout, out); err != nil {
-			return writeErr(opts.Stderr, format, err)
-		}
-		return output.ExitOK
-	}
-	v := out
-	if strings.TrimSpace(a.root.Fields) != "" {
-		if v, err = output.FilterFields(v, strings.Split(a.root.Fields, ",")); err != nil {
-			return writeErr(opts.Stderr, format, op.Errorf(op.KindUsage, "invalid_fields", "%s", err.Error()))
-		}
-	}
-	if err := output.EncodeJSON(opts.Stdout, v); err != nil {
+	if err := a.print(e, out, opts, format); err != nil {
 		return writeErr(opts.Stderr, format, err)
 	}
 	return output.ExitOK
+}
+
+// print writes an operation's output to stdout: the render hook for human
+// output, otherwise JSON filtered by --fields.
+func (a *app) print(e *op.Entry, out any, opts Options, format output.Format) error {
+	if format != output.FormatJSON && e.CanRender() {
+		return e.Render(opts.Stdout, out)
+	}
+	v := out
+	if strings.TrimSpace(a.root.Fields) != "" {
+		var err error
+		if v, err = output.FilterFields(v, strings.Split(a.root.Fields, ",")); err != nil {
+			return op.Errorf(op.KindUsage, "invalid_fields", "%s", err.Error())
+		}
+	}
+	return output.EncodeJSON(opts.Stdout, v)
 }
 
 func writeErr(w io.Writer, format output.Format, err error) int {

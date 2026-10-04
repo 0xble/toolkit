@@ -41,6 +41,10 @@ field is declared once.
   never needs `confirm`. The registry enforces this before any handler runs.
 - **CLI path.** `note <id> delete` mounts the command under `note`, with `<id>`
   a positional argument that fills the input field whose json name is `id`.
+- **Default commands.** `DefaultCommand: true` makes the last CLI word the
+  default subcommand of its parent: `items list` also runs as `items`, and
+  `item <id> show` as `item <id>`. The word keeps working and is hidden from
+  help. Tools that grew such commands under kong keep their spelling.
 - **Root flags.** A tool can declare root flags (for example `--limit` or
   `--account`) whose json tag names an input field. They fill that field in
   every operation that has it, so `tool --limit 5 notes list` and
@@ -49,7 +53,10 @@ field is declared once.
   operation's `Render` hook if it has one, and JSON if not.
 - **Errors.** Handlers return `*op.Error` with a kind. The kind maps to the
   exit code, the HTTP status and an MCP `isError` result, each carrying the
-  same `{code, message, suggestions}` payload.
+  same `{code, message, suggestions}` payload. An error may carry the output
+  produced before the failure in `Error.Result` (for example the report of a
+  batch that stopped part way): the CLI prints it to stdout and the error to
+  stderr, and HTTP and MCP add it to the error body as `"result"`.
 
 | Kind | Exit | HTTP |
 | --- | --- | --- |

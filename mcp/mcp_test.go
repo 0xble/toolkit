@@ -55,3 +55,14 @@ func TestOutputSchemaOnlyForObjects(t *testing.T) {
 		t.Errorf("bad input: %+v %v", res, err)
 	}
 }
+
+func TestErrorResultInIsErrorText(t *testing.T) {
+	r := op.New("t", "v")
+	op.Add(r, op.Op[empty, obj]{Name: "obj.fix", Effect: op.Read, MCP: true, Handler: func(context.Context, op.Request, empty) (obj, error) {
+		return obj{}, &op.Error{Kind: op.KindPartial, Code: "stopped", Message: "stopped", Result: obj{N: 2}}
+	}})
+	res, err := toolkittest.MCPClient(t, r, nil).CallTool(context.Background(), &sdk.CallToolParams{Name: "obj_fix", Arguments: map[string]any{}})
+	if err != nil || !res.IsError || res.Content[0].(*sdk.TextContent).Text != `{"error":{"code":"stopped","message":"stopped"},"result":{"n":2}}` {
+		t.Errorf("obj_fix: %+v %v", res, err)
+	}
+}
