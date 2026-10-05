@@ -124,6 +124,7 @@ case "$profile" in
     ;;
   gate)
     assert_candidate
+    lane_mod
     lane_check
     lane_test
     lane_lint
@@ -132,6 +133,7 @@ case "$profile" in
     ;;
   nightly)
     assert_candidate
+    lane_mod
     lane_check
     lane_test
     lane_lint

@@ -20,3 +20,11 @@ Released versions are described in their
 - `toolkittest` checks `CLIImmediate` operations: `--dry-run` previews, the
   CLI applies without `--apply`, HTTP and MCP still need `apply`, and
   destructive operations still need confirmation on every surface.
+
+### Fixed
+
+- The tool template's `bin/ci` runs `lane_mod` (`go mod verify` and
+  `go mod tidy -diff`) in the `gate` and `nightly` profiles, not only in
+  `preflight`. Tools could merge with a test-only dependency marked
+  `// indirect`, and the goreleaser `go mod tidy` hook then rewrote `go.mod`
+  after the release was tagged.
