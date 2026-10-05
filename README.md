@@ -39,6 +39,17 @@ field is declared once.
   Destructive operations also need `confirm` to apply (`--yes` or an
   interactive prompt on the CLI, `"confirm": true` on HTTP and MCP). A preview
   never needs `confirm`. The registry enforces this before any handler runs.
+- **Immediate CLI apply.** `CLIImmediate: true` on a write or destructive
+  operation makes the CLI apply without `--apply`, for clearly scoped
+  mutations such as `player pause` or `message send`. The command gains
+  `--dry-run` to preview instead, and still accepts `--apply` as a hidden
+  no-op, so existing callers keep working. Passing both is a usage error. A
+  destructive operation still needs `--yes` or a confirmed prompt. HTTP and
+  MCP are unchanged: they apply only with `"apply": true`, plus
+  `"confirm": true` when destructive, and `serve`'s default authorizer still
+  refuses applied writes. The flag shows as `cli_immediate` in the metadata,
+  `x-cli-immediate` in OpenAPI and the `toolkit/cli_immediate` key of the MCP
+  tool's `_meta`. Without it nothing changes.
 - **CLI path.** `note <id> delete` mounts the command under `note`, with `<id>`
   a positional argument that fills the input field whose json name is `id`.
 - **Default commands.** `DefaultCommand: true` makes the last CLI word the
@@ -55,7 +66,10 @@ field is declared once.
   every operation that has it, so `tool --limit 5 notes list` and
   `tool notes list --limit 5` are the same call.
 - **Output.** `--json` or `--agent` prints JSON. Otherwise the CLI uses the
-  operation's `Render` hook if it has one, and JSON if not.
+  operation's `Render` hook if it has one, and JSON if not. A hook whose text
+  depends on the call, such as a next-page hint that repeats `--limit`, can
+  be `RenderWithInput: func(w io.Writer, in In, out Out) error` instead, and
+  receives the decoded input. An operation sets at most one of the two.
 - **Warnings.** An operation that carries warnings in its result can declare
   `Warnings: func(out Out) []string`. In human output the CLI prints each to
   stderr as `warning: <text>` before the result (or the error, for an error
@@ -149,8 +163,9 @@ notes metadata --json
 ```
 
 [`examples/sample`](examples/sample) is a complete tool with read, write and
-destructive operations, root flags and render hooks, plus the conformance and
-end-to-end tests that drive its real binary over every surface.
+destructive operations, an immediate CLI write, root flags and render hooks,
+plus the conformance and end-to-end tests that drive its real binary over
+every surface.
 
 ## Conformance
 
@@ -172,7 +187,10 @@ It checks that the metadata is valid `toolkit.metadata.v1`, that MCP
 `tools/list` and the OpenAPI document match the registry, that the CLI, HTTP
 and MCP return the same output, that destructive operations refuse to apply
 without `confirm` on every surface, and that writes change nothing without
-`apply`.
+`apply`. For an operation with `CLIImmediate` it previews the CLI with
+`--dry-run`, checks that the CLI applies without `--apply` while HTTP and MCP
+still preview without `apply`, and checks that the OpenAPI and MCP documents
+carry the flag. Case `Args` never include `--apply` or `--dry-run`.
 
 ## Tool CI
 

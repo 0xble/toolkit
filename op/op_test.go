@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"net/http"
 	"strings"
 	"testing"
@@ -47,6 +48,13 @@ func TestAddRejectsBadDeclarations(t *testing.T) {
 		"leading arg":        func(r *op.Registry) { o := ok; o.CLI = "<id> get"; op.Add(r, o) },
 		"same command words": func(r *op.Registry) { op.Add(r, ok); o := ok; o.Name = "item.show"; o.CLI = "item get"; op.Add(r, o) },
 		"prefix of another":  func(r *op.Registry) { op.Add(r, ok); o := ok; o.Name = "item.x"; o.CLI = "item"; op.Add(r, o) },
+		"immediate read":     func(r *op.Registry) { o := ok; o.CLIImmediate = true; op.Add(r, o) },
+		"two render hooks": func(r *op.Registry) {
+			o := ok
+			o.Render = func(io.Writer, res) error { return nil }
+			o.RenderWithInput = func(io.Writer, idIn, res) error { return nil }
+			op.Add(r, o)
+		},
 		"reserved apply": func(r *op.Registry) {
 			op.Add(r, op.Op[struct {
 				Apply bool `json:"apply"`

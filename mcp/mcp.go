@@ -50,6 +50,10 @@ func NewServer(reg *op.Registry, auth op.Authorizer, httpReq *http.Request) *sdk
 	return s
 }
 
+// MetaCLIImmediate is the tool _meta key set to true for an operation with
+// CLIImmediate. It is informational: the MCP tool still needs apply.
+const MetaCLIImmediate = "toolkit/cli_immediate"
+
 // Tool is the MCP tool definition of e. The output schema is set only when
 // the output is always a JSON object, as MCP requires. Any other output,
 // including an op.Op whose Out is any or json.RawMessage, has no output
@@ -67,6 +71,9 @@ func Tool(e *op.Entry) *sdk.Tool {
 	}
 	if out := e.OutputSchema(); out.Type == "object" {
 		t.OutputSchema = out
+	}
+	if e.CLIImmediate {
+		t.Meta = sdk.Meta{MetaCLIImmediate: true}
 	}
 	return t
 }

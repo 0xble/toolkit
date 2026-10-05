@@ -9,7 +9,8 @@ import (
 // OpenAPI returns the OpenAPI 3.1 document for reg. Request and response
 // schemas are the registry's own JSON Schemas, inlined, so the document and
 // the metadata cannot drift. Each operation's id is its MCP name, and its
-// effect is in the x-effect extension.
+// effect is in the x-effect extension. An operation with CLIImmediate also
+// has "x-cli-immediate": true; the HTTP route still needs apply.
 func OpenAPI(reg *op.Registry) map[string]any {
 	errRef := map[string]any{"$ref": "#/components/responses/Error"}
 	paths := map[string]any{
@@ -23,7 +24,7 @@ func OpenAPI(reg *op.Registry) map[string]any {
 		}},
 	}
 	for _, e := range reg.Entries() {
-		paths["/ops/"+e.Name] = map[string]any{"post": map[string]any{
+		post := map[string]any{
 			"operationId": e.MCPName(),
 			"summary":     e.Summary,
 			"x-effect":    e.Effect,
@@ -33,7 +34,11 @@ func OpenAPI(reg *op.Registry) map[string]any {
 				"200":     map[string]any{"description": "Operation output", "content": jsonContent(e.OutputSchema())},
 				"default": errRef,
 			},
-		}}
+		}
+		if e.CLIImmediate {
+			post["x-cli-immediate"] = true
+		}
+		paths["/ops/"+e.Name] = map[string]any{"post": post}
 	}
 	return map[string]any{
 		"openapi": "3.1.0",

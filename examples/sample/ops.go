@@ -76,17 +76,23 @@ func Register(reg *op.Registry, s *Store) {
 			}
 			return p, nil
 		},
-		Render: func(w io.Writer, p NotesPage) error {
+		// The next-page hint repeats the caller's filters, so the render hook
+		// reads them from the input rather than from hidden result fields.
+		RenderWithInput: func(w io.Writer, in ListInput, p NotesPage) error {
 			rows := make([][]string, 0, len(p.Notes))
 			for _, n := range p.Notes {
 				rows = append(rows, []string{n.ID, n.Title, strings.Join(n.Tags, ",")})
 			}
 			output.PrintTable(w, []string{"ID", "TITLE", "TAGS"}, rows)
-			if p.Next != "" {
-				_, err := fmt.Fprintf(w, "next page: --cursor %s\n", p.Next)
-				return err
+			if p.Next == "" {
+				return nil
 			}
-			return nil
+			hint := fmt.Sprintf("--limit %d --cursor %s", in.Limit, p.Next)
+			if in.Tag != "" {
+				hint = "--tag " + in.Tag + " " + hint
+			}
+			_, err := fmt.Fprintf(w, "next page: sample notes list %s\n", hint)
+			return err
 		},
 	})
 	op.Add(reg, op.Op[IDInput, Note]{
@@ -100,7 +106,9 @@ func Register(reg *op.Registry, s *Store) {
 		},
 	})
 	op.Add(reg, op.Op[CreateInput, Change]{
-		Name: "note.create", CLI: "notes create", Summary: "Create a note", Effect: op.Write, MCP: true,
+		// A clearly scoped write: the CLI creates without --apply and
+		// previews with --dry-run. HTTP and MCP still need "apply": true.
+		Name: "note.create", CLI: "notes create", Summary: "Create a note", Effect: op.Write, MCP: true, CLIImmediate: true,
 		Handler: func(_ context.Context, req op.Request, in CreateInput) (Change, error) {
 			if strings.TrimSpace(in.Title) == "" {
 				return Change{}, op.Errorf(op.KindUsage, "invalid_title", "title must not be empty")
@@ -111,7 +119,7 @@ func Register(reg *op.Registry, s *Store) {
 			}
 			return Change{Applied: true, Note: s.Create(n)}, nil
 		},
-		Render: renderChange("create"),
+		Render: renderChange("create", "drop --dry-run to create"),
 	})
 	op.Add(reg, op.Op[RenameInput, Change]{
 		// Not an MCP tool: shows that MCP exposure is opt-in per operation.
@@ -128,7 +136,7 @@ func Register(reg *op.Registry, s *Store) {
 			n, err = s.Rename(in.ID, in.Title)
 			return Change{Applied: err == nil, Note: n}, err
 		},
-		Render: renderChange("rename"),
+		Render: renderChange("rename", "pass --apply to rename"),
 	})
 	op.Add(reg, op.Op[IDInput, Change]{
 		Name: "note.delete", CLI: "note <id> delete", Summary: "Delete a note permanently", Effect: op.Destructive, MCP: true,
@@ -140,15 +148,15 @@ func Register(reg *op.Registry, s *Store) {
 			n, err = s.Delete(in.ID)
 			return Change{Applied: err == nil, Note: n}, err
 		},
-		Render: renderChange("delete"),
+		Render: renderChange("delete", "pass --apply --yes to delete"),
 	})
 }
 
-func renderChange(verb string) func(io.Writer, Change) error {
+func renderChange(verb, hint string) func(io.Writer, Change) error {
 	return func(w io.Writer, c Change) error {
 		what := strings.TrimSpace(c.Note.ID + " " + strconv.Quote(c.Note.Title))
 		if !c.Applied {
-			_, err := fmt.Fprintf(w, "would %s %s (preview; pass --apply to %s)\n", verb, what, verb)
+			_, err := fmt.Fprintf(w, "would %s %s (preview; %s)\n", verb, what, hint)
 			return err
 		}
 		_, err := fmt.Fprintf(w, "%sd %s\n", verb, what)

@@ -15,6 +15,8 @@
         "type": "object",
         "required": ["name", "cli", "summary", "effect", "mcp", "mcp_name", "input", "output"],
         "additionalProperties": false,
+        "if": {"required": ["cli_immediate"]},
+        "then": {"properties": {"effect": {"enum": ["write", "destructive"]}}},
         "properties": {
           "name": {"type": "string", "pattern": "^[a-z][a-z0-9_]*(\\.[a-z][a-z0-9_]*)*$"},
           "cli": {"type": "string", "minLength": 1},
@@ -23,6 +25,7 @@
           "effect": {"enum": ["read", "write", "destructive"]},
           "mcp": {"type": "boolean"},
           "mcp_name": {"type": "string", "pattern": "^[a-z][a-z0-9_]*$"},
+          "cli_immediate": {"const": true, "description": "The CLI applies without --apply and previews with --dry-run. HTTP and MCP still need apply."},
           "input": {"type": "object"},
           "output": {"type": "object"}
         }

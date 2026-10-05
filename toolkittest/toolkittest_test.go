@@ -34,12 +34,20 @@ func fixture(broken string) toolkittest.Fixture {
 		return o, nil
 	}})
 	for _, eff := range []op.Effect{op.Write, op.Destructive} {
-		op.Add(r, op.Op[in, out]{Name: "count." + string(eff), Effect: eff, MCP: true, Handler: func(_ context.Context, req op.Request, _ in) (out, error) {
-			if req.Apply || broken == "preview_mutates" {
-				count++
+		for _, now := range []bool{false, true} {
+			name := "count." + string(eff)
+			if now {
+				name += "_now"
 			}
-			return out{Applied: req.Apply}, nil
-		}})
+			op.Add(r, op.Op[in, out]{Name: name, CLI: strings.NewReplacer(".", " ", "_", "-").Replace(name), Effect: eff, MCP: true, CLIImmediate: now,
+				Handler: func(_ context.Context, req op.Request, _ in) (out, error) {
+					noop := now && broken == "immediate_noop"
+					if (req.Apply && !noop) || broken == "preview_mutates" {
+						count++
+					}
+					return out{Applied: req.Apply}, nil
+				}})
+		}
 	}
 	state := func() any { return count }
 	if broken == "constant_state" {
@@ -53,6 +61,9 @@ func suite(broken string) toolkittest.Suite {
 		"count.get":         {Input: map[string]any{"id": "a"}, Args: []string{"count", "get", "--id", "a"}},
 		"count.write":       {Input: map[string]any{"id": "a"}, Args: []string{"count", "write", "--id", "a"}},
 		"count.destructive": {Input: map[string]any{"id": "a"}, Args: []string{"count", "destructive", "--id", "a"}},
+		// CLIImmediate: the kit adds --dry-run to preview and nothing to apply.
+		"count.write_now":       {Input: map[string]any{"id": "a"}, Args: []string{"count", "write-now", "--id", "a"}},
+		"count.destructive_now": {Input: map[string]any{"id": "a"}, Args: []string{"count", "destructive-now", "--id", "a"}},
 	}
 	if broken == "missing_case" {
 		delete(cases, "count.destructive")
@@ -80,6 +91,7 @@ func TestBrokenFixturesFail(t *testing.T) {
 		"constant_state":  "CLI --apply did not change the state",
 		"missing_case":    "count.destructive is destructive and has no conformance case",
 		"parity":          "HTTP output vs CLI output differ",
+		"immediate_noop":  "CLI without --apply (CLIImmediate) did not change the state",
 	} {
 		t.Run(broken, func(t *testing.T) {
 			cmd := exec.Command(os.Args[0], "-test.run=^TestBrokenFixturesFail$", "-test.count=1")

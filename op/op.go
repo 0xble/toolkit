@@ -85,12 +85,23 @@ type Op[In, Out any] struct {
 	// Aliases ["s"], "search <query>" also runs as "s <query>". They are
 	// CLI-only and change no HTTP route, MCP name or operation name.
 	Aliases []string
+	// CLIImmediate makes the CLI apply a write or destructive operation
+	// without --apply, for clearly scoped mutations such as "player pause".
+	// The CLI gains --dry-run to preview instead and still accepts --apply as
+	// a no-op. A destructive operation still needs --yes or a confirmed
+	// prompt. HTTP and MCP are unchanged: they apply only with "apply": true,
+	// and the served default authorizer still refuses applied writes.
+	CLIImmediate bool
 	// Handler implements the operation. For write and destructive operations
 	// it must not change state unless req.Apply is true.
 	Handler func(ctx context.Context, req Request, in In) (Out, error)
 	// Render optionally prints a human summary of the result. Without it the
 	// CLI prints JSON.
 	Render func(w io.Writer, out Out) error
+	// RenderWithInput is Render for a summary that depends on the call, such
+	// as a footer that repeats the caller's --limit. It receives the decoded
+	// input. Set at most one of Render and RenderWithInput.
+	RenderWithInput func(w io.Writer, in In, out Out) error
 	// Warnings optionally lists warnings carried in the result. In human
 	// output the CLI prints each to stderr as "warning: <text>" before the
 	// result. With --json or --agent, and on HTTP and MCP, nothing extra is
@@ -109,10 +120,12 @@ type Entry struct {
 	DefaultCommand bool
 	// Aliases is Op.Aliases.
 	Aliases []string
-	In, Out reflect.Type
+	// CLIImmediate is Op.CLIImmediate.
+	CLIImmediate bool
+	In, Out      reflect.Type
 
 	call     func(ctx context.Context, req Request, in any) (any, error)
-	render   func(w io.Writer, out any) error
+	render   func(w io.Writer, in, out any) error
 	warnings func(out any) []string
 	inSchema *jsonschema.Schema
 	wire     *jsonschema.Schema
@@ -170,8 +183,14 @@ func newEntry[In, Out any](r *Registry, o Op[In, Out]) (*Entry, error) {
 	if o.Handler == nil {
 		return nil, fmt.Errorf("handler is nil")
 	}
+	if o.CLIImmediate && !o.Effect.Mutates() {
+		return nil, fmt.Errorf("CLIImmediate needs a write or destructive effect")
+	}
+	if o.Render != nil && o.RenderWithInput != nil {
+		return nil, fmt.Errorf("set at most one of Render and RenderWithInput")
+	}
 	e := &Entry{Name: o.Name, Summary: o.Summary, Effect: o.Effect, MCP: o.MCP, DefaultCommand: o.DefaultCommand,
-		Aliases: slices.Clone(o.Aliases), In: reflect.TypeFor[In](), Out: reflect.TypeFor[Out]()}
+		Aliases: slices.Clone(o.Aliases), CLIImmediate: o.CLIImmediate, In: reflect.TypeFor[In](), Out: reflect.TypeFor[Out]()}
 	if e.In.Kind() != reflect.Struct {
 		return nil, fmt.Errorf("input must be a struct, got %s", e.In)
 	}
@@ -229,12 +248,31 @@ func newEntry[In, Out any](r *Registry, o Op[In, Out]) (*Entry, error) {
 		return out, err
 	}
 	if o.Render != nil {
-		e.render = func(w io.Writer, out any) error {
+		e.render = func(w io.Writer, _, out any) error {
 			v, err := typedOut[Out](e, out)
 			if err != nil {
 				return err
 			}
 			return o.Render(w, v)
+		}
+	}
+	if o.RenderWithInput != nil {
+		e.render = func(w io.Writer, in, out any) error {
+			v, err := typedOut[Out](e, out)
+			if err != nil {
+				return err
+			}
+			var iv In
+			switch x := in.(type) {
+			case nil:
+			case *In:
+				iv = *x
+			case In:
+				iv = x
+			default:
+				return fmt.Errorf("op %s: input is %T, want %s", e.Name, in, e.In)
+			}
+			return o.RenderWithInput(w, iv, v)
 		}
 	}
 	if o.Warnings != nil {
@@ -357,15 +395,22 @@ func (e *Entry) Warnings(out any) []string {
 	return e.warnings(out)
 }
 
-// CanRender reports whether the operation has a human render hook.
+// CanRender reports whether the operation has a human render hook, Render
+// or RenderWithInput.
 func (e *Entry) CanRender() bool { return e.render != nil }
 
-// Render prints the human form of out. It errors when there is no hook.
-func (e *Entry) Render(w io.Writer, out any) error {
+// Render prints the human form of out. A RenderWithInput hook receives the
+// zero input. It errors when there is no hook.
+func (e *Entry) Render(w io.Writer, out any) error { return e.RenderWithInput(w, nil, out) }
+
+// RenderWithInput prints the human form of out for the call with input in,
+// the *In that Decode returns, an In, or nil for the zero input. A Render
+// hook ignores in. It errors when there is no hook.
+func (e *Entry) RenderWithInput(w io.Writer, in, out any) error {
 	if e.render == nil {
 		return fmt.Errorf("op %s has no render hook", e.Name)
 	}
-	return e.render(w, out)
+	return e.render(w, in, out)
 }
 
 func (e *Entry) buildWireSchema() *jsonschema.Schema {

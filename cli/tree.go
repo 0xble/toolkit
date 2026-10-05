@@ -31,6 +31,9 @@ type leaf struct {
 	args []placeholder
 	// apply is the generated --apply flag; invalid for reads.
 	apply reflect.Value
+	// dryRun is the generated --dry-run flag; valid only for an operation
+	// with CLIImmediate.
+	dryRun reflect.Value
 	// globals maps the json name of an input field bound to a root flag to
 	// that field's index path in the input.
 	globals map[string]flatField
@@ -65,7 +68,10 @@ type node struct {
 	entry    *op.Entry
 }
 
-const applyField = "ToolkitApply"
+const (
+	applyField  = "ToolkitApply"
+	dryRunField = "ToolkitDryRun"
+)
 
 func build(reg *op.Registry, opts Options) (*app, error) {
 	a := &app{leaves: map[string]*leaf{}}
@@ -322,14 +328,7 @@ func (a *app) buildType(n *node, bound map[string]bool) (reflect.Type, error) {
 		for _, f := range own {
 			fields = append(fields, f.gen)
 		}
-		if n.entry.Effect.Mutates() {
-			help := "Perform the change. Without it the command only previews."
-			if n.entry.Effect == op.Destructive {
-				help += " Destructive: also needs --yes or a confirmed prompt."
-			}
-			fields = append(fields, reflect.StructField{Name: applyField, Type: reflect.TypeFor[bool](),
-				Tag: reflect.StructTag(fmt.Sprintf(`name:"apply" help:%q json:"-"`, help))})
-		}
+		fields = append(fields, applyFlags(n.entry)...)
 	}
 	for i, c := range n.children {
 		if c.arg != "" {
@@ -359,6 +358,37 @@ func (a *app) buildType(n *node, bound map[string]bool) (reflect.Type, error) {
 		fields = append(fields, reflect.StructField{Name: fmt.Sprintf("C%d", i), Type: t, Tag: reflect.StructTag(tag)})
 	}
 	return reflect.StructOf(fields), nil
+}
+
+// applyFlags are the generated --apply and --dry-run flags of a write or
+// destructive operation. By default --apply performs the change. With
+// CLIImmediate the command applies on its own, --dry-run previews, and
+// --apply is a hidden no-op kept for callers that already pass it.
+func applyFlags(e *op.Entry) []reflect.StructField {
+	if !e.Effect.Mutates() {
+		return nil
+	}
+	flag := func(field, name, help, extra string) reflect.StructField {
+		return reflect.StructField{Name: field, Type: reflect.TypeFor[bool](),
+			Tag: reflect.StructTag(fmt.Sprintf(`name:%q help:%q json:"-"%s`, name, help, extra))}
+	}
+	destructive := e.Effect == op.Destructive
+	if !e.CLIImmediate {
+		help := "Perform the change. Without it the command only previews."
+		if destructive {
+			help += " Destructive: also needs --yes or a confirmed prompt."
+		}
+		return []reflect.StructField{flag(applyField, "apply", help, "")}
+	}
+	help := "Preview the change without applying it."
+	if destructive {
+		help += " Destructive: applying needs --yes or a confirmed prompt."
+	}
+	const xor = ` xor:"toolkit-apply"`
+	return []reflect.StructField{
+		flag(applyField, "apply", "Accepted for compatibility: this command applies without it.", xor+` hidden:""`),
+		flag(dryRunField, "dry-run", help, xor),
+	}
 }
 
 // aliasTag is the kong tag of an operation's aliases, or "".
@@ -392,6 +422,9 @@ func (a *app) collect(n *node, v reflect.Value, words []string, args []placehold
 		}
 		if n.entry.Effect.Mutates() {
 			l.apply = v.FieldByName(applyField)
+		}
+		if n.entry.CLIImmediate {
+			l.dryRun = v.FieldByName(dryRunField)
 		}
 		a.leaves[strings.Join(words, " ")] = l
 	}
