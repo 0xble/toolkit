@@ -3,6 +3,8 @@
 // shape, so it doubles as the toolkit's end-to-end fixture.
 //
 //	sample notes list --limit 2
+//	sample notes create Draft          # creates: CLIImmediate
+//	sample notes create Draft --dry-run
 //	sample note n1 delete              # preview
 //	sample note n1 delete --apply --yes
 //	sample serve --socket /tmp/sample.sock

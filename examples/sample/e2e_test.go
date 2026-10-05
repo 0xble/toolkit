@@ -43,6 +43,25 @@ func TestEndToEnd(t *testing.T) {
 	if !strings.Contains(string(run(t, bin, 0, "notes", "list")), "Groceries") {
 		t.Error("human list output does not use the render hook")
 	}
+	if out := string(run(t, bin, 0, "--limit", "1", "notes", "list", "--tag", "home")); !strings.Contains(out, "Groceries") || strings.Contains(out, "next page") {
+		t.Errorf("one home note fits one page: %s", out)
+	}
+	if out := string(run(t, bin, 0, "--limit", "2", "notes", "list")); !strings.Contains(out, "next page: sample notes list --limit 2 --cursor 2") {
+		t.Errorf("the render hook repeats the caller's --limit from the input: %s", out)
+	}
+	if out := run(t, bin, 0, "--agent", "notes", "create", "Draft"); !strings.Contains(string(out), `"applied": true`) {
+		t.Errorf("CLIImmediate create applies without --apply: %s", out)
+	}
+	if out := run(t, bin, 0, "--agent", "notes", "create", "Draft", "--apply"); !strings.Contains(string(out), `"applied": true`) {
+		t.Errorf("--apply is still accepted: %s", out)
+	}
+	if out := string(run(t, bin, 0, "notes", "create", "Draft", "--dry-run")); !strings.Contains(out, "would create") {
+		t.Errorf("--dry-run previews: %s", out)
+	}
+	runErr(t, bin, 2, "notes", "create", "Draft", "--dry-run", "--apply")
+	if out := run(t, bin, 0, "--agent", "note", "n1", "rename", "Shopping"); !strings.Contains(string(out), `"applied": false`) {
+		t.Errorf("a write without CLIImmediate still previews: %s", out)
+	}
 	meta := run(t, bin, 0, "metadata", "--json")
 	toolkittest.CheckMetadata(t, meta)
 	preview := run(t, bin, 0, "--agent", "note", "n1", "delete")
@@ -86,6 +105,9 @@ func TestEndToEnd(t *testing.T) {
 	errCode(t, "HTTP destructive apply without confirm", post(t, hc, "note.delete", `{"id":"n1","apply":true}`, 400), "confirmation_required")
 	errCode(t, "HTTP apply under the default authorizer", post(t, hc, "note.delete", `{"id":"n1","apply":true,"confirm":true}`, 403), "write_not_authorized")
 	errCode(t, "HTTP write apply under the default authorizer", post(t, hc, "note.create", `{"title":"x","apply":true}`, 403), "write_not_authorized")
+	if out := post(t, hc, "note.create", `{"title":"x"}`, 200); !strings.Contains(string(out), `"applied":false`) {
+		t.Errorf("HTTP create without apply previews despite CLIImmediate: %s", out)
+	}
 	errCode(t, "HTTP bad input", post(t, hc, "notes.list", `{"limit":"many"}`, 400), "invalid_input")
 	errCode(t, "HTTP unknown operation", post(t, hc, "nope", `{}`, 404), "unknown_operation")
 	if out := post(t, hc, "note.delete", `{"id":"n1"}`, 200); !strings.Contains(string(out), `"applied":false`) {
@@ -107,6 +129,9 @@ func TestEndToEnd(t *testing.T) {
 	same(t, "stdio MCP vs CLI", listJSON, toolText(t, stdio, "notes_list", map[string]any{"limit": 1}, false))
 	errCode(t, "stdio MCP destructive apply without confirm",
 		toolText(t, stdio, "note_delete", map[string]any{"id": "n1", "apply": true}, true), "confirmation_required")
+	if out := toolText(t, stdio, "note_create", map[string]any{"title": "x"}, false); !strings.Contains(string(out), `"applied":false`) {
+		t.Errorf("stdio MCP create without apply previews despite CLIImmediate: %s", out)
+	}
 	if out := toolText(t, stdio, "note_delete", map[string]any{"id": "n1"}, false); !strings.Contains(string(out), `"applied":false`) {
 		t.Errorf("stdio MCP preview: %s", out)
 	}

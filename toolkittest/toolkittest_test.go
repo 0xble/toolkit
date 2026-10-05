@@ -41,7 +41,8 @@ func fixture(broken string) toolkittest.Fixture {
 			}
 			op.Add(r, op.Op[in, out]{Name: name, CLI: strings.NewReplacer(".", " ", "_", "-").Replace(name), Effect: eff, MCP: true, CLIImmediate: now,
 				Handler: func(_ context.Context, req op.Request, _ in) (out, error) {
-					if (req.Apply && !(now && broken == "immediate_noop")) || broken == "preview_mutates" {
+					noop := now && broken == "immediate_noop"
+					if (req.Apply && !noop) || broken == "preview_mutates" {
 						count++
 					}
 					return out{Applied: req.Apply}, nil
