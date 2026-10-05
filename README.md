@@ -159,6 +159,31 @@ field is declared once.
 - **Authorization.** Served surfaces consult an `op.Authorizer`. The default,
   `op.DenyWrites`, allows reads and previews and refuses applied writes. The
   CLI and stdio MCP run as the local user and allow writes.
+- **Local apply.** `tool serve --socket PATH --allow-apply=OP[,OP...]`
+  (repeatable) lets a local process apply the listed write or destructive
+  operations over the socket. An applied call to a listed operation is
+  allowed only when all hold: it is an HTTP API call (`POST /ops/{name}`, not
+  `/mcp`), the peer process on the Unix socket runs as the server's uid (read
+  with `LOCAL_PEERCRED` on macOS and `SO_PEERCRED` on Linux; other platforms
+  never match), and the request has no Tailscale identity header
+  (`Tailscale-User-Login`, `Tailscale-User-Name`,
+  `Tailscale-App-Capabilities`). A destructive operation still needs
+  `"confirm": true`, checked first. Every other applied write is refused
+  with `write_not_authorized` as before. The flag adds to the tool's own
+  `Options.Authorizer` (or `op.DenyWrites`): a call is allowed when the flag
+  allows it or that authorizer does. An unknown or read operation in the
+  list fails startup with the usage error `invalid_allow_apply`. A proxy
+  running as the same user, such as one forwarding requests from a tagged
+  device without identity headers, looks local, so do not publish a socket
+  served with this flag through a proxy.
+- **MCP caller metadata.** On MCP, stdio and HTTP alike, the tool call's
+  request `_meta` reaches the handler as a copy in `op.Request.Meta`, nil
+  when the call has none. It is never read from `arguments`, so a model that
+  fills in arguments cannot set it, and it is always nil on the CLI and the
+  HTTP API. Clients may add their own protocol keys under
+  `io.modelcontextprotocol/`, so read only the keys you define. It is
+  caller-supplied transport context, trusted only as much as the transport:
+  on stdio that is the parent process that spawned the server.
 - **MCP exposure.** Opt in per operation with `MCP: true`. Tool names replace
   `.` with `_`.
 

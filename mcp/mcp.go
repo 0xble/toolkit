@@ -7,12 +7,14 @@
 // call goes through the same op.Entry.CallJSON path as HTTP, so validation,
 // the cli-only, apply and confirm rules and authorization are identical. A failed call is an isError result whose
 // text is {"error": {code, message, suggestions}}, plus the provider details
-// of op.Error that are set.
+// of op.Error that are set. The call's request _meta reaches the handler as
+// op.Request.Meta.
 package mcp
 
 import (
 	"context"
 	"encoding/json"
+	"maps"
 	"net/http"
 
 	sdk "github.com/modelcontextprotocol/go-sdk/mcp"
@@ -41,7 +43,8 @@ func NewServer(reg *op.Registry, auth op.Authorizer, httpReq *http.Request) *sdk
 			continue
 		}
 		s.AddTool(Tool(e), func(ctx context.Context, req *sdk.CallToolRequest) (*sdk.CallToolResult, error) {
-			out, err := e.CallJSON(ctx, op.Request{Surface: op.SurfaceMCP, HTTP: httpReq}, req.Params.Arguments, auth)
+			r := op.Request{Surface: op.SurfaceMCP, HTTP: httpReq, Meta: maps.Clone(req.Params.Meta)}
+			out, err := e.CallJSON(ctx, r, req.Params.Arguments, auth)
 			if err != nil {
 				return errorResult(err), nil
 			}
