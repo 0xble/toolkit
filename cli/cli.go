@@ -12,6 +12,7 @@ package cli
 import (
 	"bufio"
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -220,11 +221,40 @@ func (a *app) print(e *op.Entry, in, out any, opts Options, format output.Format
 
 func writeErr(w io.Writer, format output.Format, err error) int {
 	var ce *output.CLIError
-	if !errors.As(err, &ce) {
-		ce = op.AsError(err, op.KindError).CLIError()
+	if errors.As(err, &ce) {
+		output.WriteError(w, format, ce)
+		return ce.ExitCode
 	}
-	output.WriteError(w, format, ce)
+	oe := op.AsError(err, op.KindError)
+	ce = oe.CLIError()
+	if format != output.FormatJSON || !hasDetails(oe) {
+		output.WriteError(w, format, ce)
+		return ce.ExitCode
+	}
+	d := detailedError{CLIError: ce, HTTPStatus: oe.HTTPStatus, RetryAfterSeconds: oe.RetryAfterSeconds, RequestID: oe.RequestID}
+	if oe.Retryable != nil || ce.Retryable {
+		d.Retryable = &ce.Retryable
+	}
+	_ = json.NewEncoder(w).Encode(struct {
+		Error detailedError `json:"error"`
+	}{d})
 	return ce.ExitCode
+}
+
+// detailedError is the JSON envelope of an op.Error with provider details:
+// output.CLIError's fields in their order, then the details, each only when
+// set. Its retryable replaces the embedded one so that an explicit false
+// override is printed too.
+type detailedError struct {
+	*output.CLIError
+	Retryable         *bool  `json:"retryable,omitempty"`
+	HTTPStatus        int    `json:"http_status,omitempty"`
+	RetryAfterSeconds int    `json:"retry_after_seconds,omitempty"`
+	RequestID         string `json:"request_id,omitempty"`
+}
+
+func hasDetails(e *op.Error) bool {
+	return e.Retryable != nil || e.HTTPStatus != 0 || e.RetryAfterSeconds != 0 || e.RequestID != ""
 }
 
 func wantsJSON(args []string) bool {

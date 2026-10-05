@@ -38,6 +38,15 @@ type NotesPage struct {
 	HasMore    bool   `json:"has_more"`
 }
 
+type SyncInput struct {
+	Fail int `json:"fail,omitempty" help:"Make the fake upstream answer with this HTTP status, such as 429 or 503"`
+}
+
+// Synced is the result of a sync with the upstream service.
+type Synced struct {
+	Pulled int `json:"pulled"`
+}
+
 type IDInput struct {
 	ID string `json:"id" help:"Note ID"`
 }
@@ -96,6 +105,17 @@ func Register(reg *op.Registry, s *Store) {
 			}
 			_, err := fmt.Fprintf(w, "next page: sample notes list %s\n", hint)
 			return err
+		},
+	})
+	op.Add(reg, op.Op[SyncInput, Synced]{
+		// A provider call: its failures carry the provider's status, request
+		// ID, Retry-After and whether to retry, on every surface.
+		Name: "notes.sync", Summary: "Pull notes from the upstream service", Effect: op.Read, MCP: true,
+		Handler: func(_ context.Context, _ op.Request, in SyncInput) (Synced, error) {
+			if in.Fail != 0 {
+				return Synced{}, upstreamError(in.Fail)
+			}
+			return Synced{}, nil
 		},
 	})
 	op.Add(reg, op.Op[IDInput, Note]{

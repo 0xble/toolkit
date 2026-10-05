@@ -98,7 +98,6 @@ field is declared once.
   produced before the failure in `Error.Result` (for example the report of a
   batch that stopped part way): the CLI prints it to stdout and the error to
   stderr, and HTTP and MCP add it to the error body as `"result"`.
-
 | Kind | Exit | HTTP |
 | --- | --- | --- |
 | (success) | 0 | 200 |
@@ -112,6 +111,22 @@ field is declared once.
 | `stale_index` | 8 | 503 |
 | `model_unavailable` | 9 | 503 |
 | `partial` | 10 | 207 |
+
+- **Provider error details.** A failure that came from a provider response
+  can say how to retry. `op.Error` has optional `Retryable` (a `*bool`),
+  `HTTPStatus` (the provider's status, not the toolkit's), `RetryAfterSeconds`
+  and `RequestID`. Each is printed only when set, as `retryable`,
+  `http_status`, `retry_after_seconds` and `request_id`, in the CLI JSON
+  envelope, the HTTP error body and the MCP error text alike, so an error
+  without them prints exactly what it printed before. The CLI envelope has
+  always derived `retryable: true` for the `rate` and `timeout` kinds and
+  still does. `Retryable` overrides that everywhere, `false` included. HTTP
+  also sends `RetryAfterSeconds` as a `Retry-After` header. Carry only
+  sanitized values.
+
+  ```json
+  {"error":{"code":"provider_unavailable","message":"upstream answered 503","exit_code":1,"retryable":true,"http_status":503,"request_id":"req_sample"}}
+  ```
 
 - **Serving.** `tool serve --socket PATH` listens on a Unix socket created
   with mode `0600` and serves `GET /ops`, `POST /ops/{name}`,
@@ -172,7 +187,8 @@ notes metadata --json
 ```
 
 [`examples/sample`](examples/sample) is a complete tool with read, write and
-destructive operations, an immediate CLI write, root flags and render hooks,
+destructive operations, an immediate CLI write, a paged list, provider error
+details, root flags and render hooks,
 plus the conformance and end-to-end tests that drive its real binary over
 every surface.
 

@@ -14,3 +14,10 @@ Released versions are described in their
   `{}`. Without `Paged`, `--fields` still keeps top-level keys, so no existing
   output changes. `op.Add` rejects `Paged` on an output without an `items`
   array.
+- `op.Error` carries optional provider details: `Retryable` (`*bool`),
+  `HTTPStatus`, `RetryAfterSeconds` and `RequestID`, printed only when set
+  as `retryable`, `http_status`, `retry_after_seconds` and `request_id` in
+  the CLI JSON envelope, the HTTP error body and the MCP error text.
+  `Retryable` overrides the CLI's kind-derived value. HTTP also sends a
+  `Retry-After` header, and the OpenAPI error schema lists the four keys.
+  Envelopes of errors without details are byte-identical to v0.1.4.
