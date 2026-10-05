@@ -57,6 +57,16 @@ type Request struct {
 	// HTTP is the inbound request on the HTTP and HTTP-MCP surfaces, for
 	// authorizers that read transport identity. Nil on the CLI and stdio MCP.
 	HTTP *http.Request
+	// Meta is a copy of the MCP tool call's request _meta on the MCP surface
+	// (stdio and HTTP), or nil when the call has none. Clients may add
+	// protocol keys under io.modelcontextprotocol/, so read only the keys you
+	// define. It is always nil on the CLI and the HTTP API, and is never read
+	// from the arguments, so a model that fills in arguments cannot set it.
+	// It is caller-supplied
+	// transport context, trusted only as much as the transport: on stdio,
+	// the parent process that spawned the server; on HTTP, whoever can reach
+	// the socket.
+	Meta map[string]any
 }
 
 // Op declares one operation. In is a struct. Out is usually a struct but may

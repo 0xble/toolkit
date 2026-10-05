@@ -12,9 +12,12 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"maps"
 	"net/http"
 	"os"
 	"os/signal"
+	"slices"
+	"strings"
 	"syscall"
 	"time"
 
@@ -35,7 +38,9 @@ type Options struct {
 	// Commands are hand-written commands mounted next to the operations.
 	Commands []cli.Command
 	// Authorizer decides whether a remote caller of serve (HTTP and HTTP MCP)
-	// may run an operation. Nil means op.DenyWrites.
+	// may run an operation. Nil means op.DenyWrites. serve's --allow-apply
+	// adds to it: an applied call to a listed operation from a local owner
+	// is allowed, and every other call is still decided here.
 	Authorizer op.Authorizer
 }
 
@@ -74,20 +79,29 @@ func Handler(reg *op.Registry, auth op.Authorizer) http.Handler {
 }
 
 type serveCmd struct {
-	Socket string `required:"" type:"path" help:"Unix socket path to listen on. Created with mode 0600."`
+	Socket     string   `required:"" type:"path" help:"Unix socket path to listen on. Created with mode 0600."`
+	AllowApply []string `name:"allow-apply" placeholder:"OP" help:"Allow applied calls to these write or destructive operations on the HTTP API from a local process running as this user, without a Tailscale identity header. Repeatable or comma-separated."`
 
 	auth op.Authorizer
 }
 
 func (c *serveCmd) Run(ctx *cli.Context) error {
+	allowed, err := parseAllowApply(ctx.Registry, c.AllowApply)
+	if err != nil {
+		return err
+	}
 	ln, err := ListenUnix(c.Socket)
 	if err != nil {
 		return op.Errorf(op.KindError, "listen_failed", "%v", err)
 	}
-	srv := &http.Server{Handler: Handler(ctx.Registry, c.auth), ReadHeaderTimeout: 10 * time.Second}
+	srv := &http.Server{Handler: Handler(ctx.Registry, allowApply(allowed, c.auth)), ConnContext: withPeerUID,
+		ReadHeaderTimeout: 10 * time.Second}
 	done := make(chan error, 1)
 	go func() { done <- srv.Serve(ln) }()
 	_, _ = fmt.Fprintf(ctx.Stderr, "%s: serving on %s\n", ctx.Registry.Tool, c.Socket)
+	if len(allowed) > 0 {
+		_, _ = fmt.Fprintf(ctx.Stderr, "%s: local apply allowed for %s\n", ctx.Registry.Tool, strings.Join(slices.Sorted(maps.Keys(allowed)), ", "))
+	}
 	select {
 	case err := <-done:
 		_ = os.Remove(c.Socket)
