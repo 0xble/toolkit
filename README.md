@@ -65,6 +65,16 @@ field is declared once.
   `--account`) whose json tag names an input field. They fill that field in
   every operation that has it, so `tool --limit 5 notes list` and
   `tool notes list --limit 5` are the same call.
+- **Reserved flags.** kong parses a command flag that reuses a root flag's
+  name, alias or short form as the root flag, so the command never sees it:
+  an input field named `version` would print the tool's version instead.
+  `cli.Validate`, and so the conformance kit, rejects such a flag, whether
+  it shadows a toolkit flag (`--json`/`-j`, `--agent`, `--fields`,
+  `--yes`/`-y`, `--version`, `--help`/`-h`) or one of the tool's own root
+  flags, and rejects an operation input flag named `--apply` or `--dry-run`.
+  Rename it with a kong `name` tag, as in `name:"at-version"`. It is not
+  overridable. `Run` does not repeat the check, so a binary that already
+  ships such a flag keeps running.
 - **Output.** `--json` or `--agent` prints JSON. Otherwise the CLI uses the
   operation's `Render` hook if it has one, and JSON if not. A hook whose text
   depends on the call, such as a next-page hint that repeats `--limit`, can
@@ -208,7 +218,8 @@ func TestConformance(t *testing.T) {
 }
 ```
 
-It checks that the metadata is valid `toolkit.metadata.v1`, that MCP
+It checks that `cli.Validate` accepts the command tree, including the
+reserved flags, that the metadata is valid `toolkit.metadata.v1`, that MCP
 `tools/list` and the OpenAPI document match the registry, that the CLI, HTTP
 and MCP return the same output, that destructive operations refuse to apply
 without `confirm` on every surface, and that writes change nothing without

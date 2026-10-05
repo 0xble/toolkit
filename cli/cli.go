@@ -132,10 +132,18 @@ func Run(ctx context.Context, reg *op.Registry, opts Options, args []string) (co
 }
 
 // Validate builds the command tree without running it, so a tool's tests
-// catch a declaration kong rejects, such as a duplicate flag.
+// catch a declaration kong rejects, such as a duplicate flag. It also
+// rejects a command flag that kong accepts but would never deliver: one that
+// reuses the name, an alias or the short form of a root flag (--json, --agent,
+// --fields, --yes, --version, --help or one of the tool's Globals), and an
+// operation flag named --apply or --dry-run. Run does not repeat this check,
+// so a tool that already ships such a flag keeps running.
 func Validate(reg *op.Registry, opts Options) error {
-	_, _, err := newKong(reg, opts)
-	return err
+	a, k, err := newKong(reg, opts)
+	if err != nil {
+		return err
+	}
+	return a.checkFlags(k)
 }
 
 func newKong(reg *op.Registry, opts Options, extra ...kong.Option) (*app, *kong.Kong, error) {

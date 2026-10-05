@@ -21,3 +21,13 @@ Released versions are described in their
   `Retryable` overrides the CLI's kind-derived value. HTTP also sends a
   `Retry-After` header, and the OpenAPI error schema lists the four keys.
   Envelopes of errors without details are byte-identical to v0.1.4.
+
+### Changed
+
+- `cli.Validate`, and with it the `toolkittest` command-tree check, rejects a
+  command flag that kong would silently parse as a root flag: one reusing the
+  name, an alias or the short form of `--json`/`-j`, `--agent`, `--fields`,
+  `--yes`/`-y`, `--version`, `--help`/`-h` or one of the tool's `Globals`,
+  and an operation input flag named `--apply` or `--dry-run`. The error names
+  the operation or command, the flag and what it collides with. `cli.Run` is
+  unchanged, so an existing binary keeps running until its tests catch it.
