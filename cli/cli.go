@@ -211,7 +211,7 @@ func (a *app) print(e *op.Entry, in, out any, opts Options, format output.Format
 	v := out
 	if strings.TrimSpace(a.root.Fields) != "" {
 		var err error
-		if v, err = output.FilterFields(v, strings.Split(a.root.Fields, ",")); err != nil {
+		if v, err = filterFields(e, v, strings.Split(a.root.Fields, ",")); err != nil {
 			return op.Errorf(op.KindUsage, "invalid_fields", "%s", err.Error())
 		}
 	}

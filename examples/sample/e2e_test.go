@@ -49,6 +49,9 @@ func TestEndToEnd(t *testing.T) {
 	if out := string(run(t, bin, 0, "--limit", "2", "notes", "list")); !strings.Contains(out, "next page: sample notes list --limit 2 --cursor 2") {
 		t.Errorf("the render hook repeats the caller's --limit from the input: %s", out)
 	}
+	same(t, "--fields on a Paged operation projects each item and keeps the envelope",
+		[]byte(`{"items":[{"id":"n1","title":"Groceries"},{"id":"n2","title":"Standup"}],"next_cursor":"2","has_more":true}`),
+		run(t, bin, 0, "--agent", "--limit", "2", "--fields", "id,title", "notes", "list"))
 	if out := run(t, bin, 0, "--agent", "notes", "create", "Draft"); !strings.Contains(string(out), `"applied": true`) {
 		t.Errorf("CLIImmediate create applies without --apply: %s", out)
 	}
@@ -139,7 +142,7 @@ func TestEndToEnd(t *testing.T) {
 		t.Errorf("stdio MCP apply with confirm: %s", out)
 	}
 	var page NotesPage
-	if err := json.Unmarshal(toolText(t, stdio, "notes_list", map[string]any{}, false), &page); err != nil || len(page.Notes) != 2 {
+	if err := json.Unmarshal(toolText(t, stdio, "notes_list", map[string]any{}, false), &page); err != nil || len(page.Items) != 2 {
 		t.Errorf("after the stdio delete: %+v, %v; want 2 notes", page, err)
 	}
 	if _, err := stdio.CallTool(ctx, &sdk.CallToolParams{Name: "note_rename", Arguments: map[string]any{}}); err == nil {

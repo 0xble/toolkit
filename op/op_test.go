@@ -24,6 +24,11 @@ type listIn struct {
 	Tag   string `json:"tag,omitempty"`
 }
 
+// badPage has an items key that is not an array.
+type badPage struct {
+	Items string `json:"items"`
+}
+
 type res struct {
 	Applied bool `json:"applied"`
 }
@@ -39,16 +44,25 @@ func TestAddRejectsBadDeclarations(t *testing.T) {
 	var n int
 	ok := op.Op[idIn, res]{Name: "item.get", CLI: "item <id> get", Effect: op.Read, Handler: handler[idIn](&n)}
 	cases := map[string]func(r *op.Registry){
-		"bad name":           func(r *op.Registry) { o := ok; o.Name = "Item.Get"; op.Add(r, o) },
-		"no handler":         func(r *op.Registry) { o := ok; o.Handler = nil; op.Add(r, o) },
-		"bad effect":         func(r *op.Registry) { o := ok; o.Effect = "maybe"; op.Add(r, o) },
-		"duplicate":          func(r *op.Registry) { op.Add(r, ok); op.Add(r, ok) },
-		"placeholder field":  func(r *op.Registry) { o := ok; o.CLI = "item <key> get"; op.Add(r, o) },
-		"trailing arg":       func(r *op.Registry) { o := ok; o.CLI = "item get <id>"; op.Add(r, o) },
-		"leading arg":        func(r *op.Registry) { o := ok; o.CLI = "<id> get"; op.Add(r, o) },
-		"same command words": func(r *op.Registry) { op.Add(r, ok); o := ok; o.Name = "item.show"; o.CLI = "item get"; op.Add(r, o) },
-		"prefix of another":  func(r *op.Registry) { op.Add(r, ok); o := ok; o.Name = "item.x"; o.CLI = "item"; op.Add(r, o) },
-		"immediate read":     func(r *op.Registry) { o := ok; o.CLIImmediate = true; op.Add(r, o) },
+		"bad name":            func(r *op.Registry) { o := ok; o.Name = "Item.Get"; op.Add(r, o) },
+		"no handler":          func(r *op.Registry) { o := ok; o.Handler = nil; op.Add(r, o) },
+		"bad effect":          func(r *op.Registry) { o := ok; o.Effect = "maybe"; op.Add(r, o) },
+		"duplicate":           func(r *op.Registry) { op.Add(r, ok); op.Add(r, ok) },
+		"placeholder field":   func(r *op.Registry) { o := ok; o.CLI = "item <key> get"; op.Add(r, o) },
+		"trailing arg":        func(r *op.Registry) { o := ok; o.CLI = "item get <id>"; op.Add(r, o) },
+		"leading arg":         func(r *op.Registry) { o := ok; o.CLI = "<id> get"; op.Add(r, o) },
+		"same command words":  func(r *op.Registry) { op.Add(r, ok); o := ok; o.Name = "item.show"; o.CLI = "item get"; op.Add(r, o) },
+		"prefix of another":   func(r *op.Registry) { op.Add(r, ok); o := ok; o.Name = "item.x"; o.CLI = "item"; op.Add(r, o) },
+		"immediate read":      func(r *op.Registry) { o := ok; o.CLIImmediate = true; op.Add(r, o) },
+		"paged without items": func(r *op.Registry) { o := ok; o.Paged = true; op.Add(r, o) },
+		"paged non-array items": func(r *op.Registry) {
+			op.Add(r, op.Op[idIn, badPage]{Name: "a", Effect: op.Read, Paged: true,
+				Handler: func(context.Context, op.Request, idIn) (badPage, error) { return badPage{}, nil }})
+		},
+		"paged any output": func(r *op.Registry) {
+			op.Add(r, op.Op[idIn, any]{Name: "a", Effect: op.Read, Paged: true,
+				Handler: func(context.Context, op.Request, idIn) (any, error) { return nil, nil }})
+		},
 		"two render hooks": func(r *op.Registry) {
 			o := ok
 			o.Render = func(io.Writer, res) error { return nil }

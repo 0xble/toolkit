@@ -92,6 +92,12 @@ type Op[In, Out any] struct {
 	// prompt. HTTP and MCP are unchanged: they apply only with "apply": true,
 	// and the served default authorizer still refuses applied writes.
 	CLIImmediate bool
+	// Paged declares that the output is a page: an object whose items array
+	// holds the results, next to envelope keys such as next_cursor and
+	// has_more. The CLI's --fields then keeps the named keys of each item and
+	// every envelope key, rather than the named top-level keys. The output
+	// must have an items array.
+	Paged bool
 	// Handler implements the operation. For write and destructive operations
 	// it must not change state unless req.Apply is true.
 	Handler func(ctx context.Context, req Request, in In) (Out, error)
@@ -122,7 +128,9 @@ type Entry struct {
 	Aliases []string
 	// CLIImmediate is Op.CLIImmediate.
 	CLIImmediate bool
-	In, Out      reflect.Type
+	// Paged is Op.Paged.
+	Paged   bool
+	In, Out reflect.Type
 
 	call     func(ctx context.Context, req Request, in any) (any, error)
 	render   func(w io.Writer, in, out any) error
@@ -190,7 +198,7 @@ func newEntry[In, Out any](r *Registry, o Op[In, Out]) (*Entry, error) {
 		return nil, fmt.Errorf("set at most one of Render and RenderWithInput")
 	}
 	e := &Entry{Name: o.Name, Summary: o.Summary, Effect: o.Effect, MCP: o.MCP, DefaultCommand: o.DefaultCommand,
-		Aliases: slices.Clone(o.Aliases), CLIImmediate: o.CLIImmediate, In: reflect.TypeFor[In](), Out: reflect.TypeFor[Out]()}
+		Aliases: slices.Clone(o.Aliases), CLIImmediate: o.CLIImmediate, Paged: o.Paged, In: reflect.TypeFor[In](), Out: reflect.TypeFor[Out]()}
 	if e.In.Kind() != reflect.Struct {
 		return nil, fmt.Errorf("input must be a struct, got %s", e.In)
 	}
@@ -225,6 +233,9 @@ func newEntry[In, Out any](r *Registry, o Op[In, Out]) (*Entry, error) {
 	}
 	if e.out, err = schemaFor(e.Out); err != nil {
 		return nil, fmt.Errorf("output schema: %w", err)
+	}
+	if e.Paged && !hasItemsArray(e.out) {
+		return nil, fmt.Errorf("a Paged operation needs an output object with an items array")
 	}
 	e.wire = e.buildWireSchema()
 	if e.resolved, err = e.wire.Resolve(nil); err != nil {
@@ -287,6 +298,15 @@ func newEntry[In, Out any](r *Registry, o Op[In, Out]) (*Entry, error) {
 		}
 	}
 	return e, nil
+}
+
+// hasItemsArray reports whether s is an object schema with an items array.
+func hasItemsArray(s *jsonschema.Schema) bool {
+	if s.Type != "object" {
+		return false
+	}
+	p := s.Properties["items"]
+	return p != nil && (p.Type == "array" || slices.Contains(p.Types, "array"))
 }
 
 // typedOut converts an output back to Out. A nil output is the zero value of

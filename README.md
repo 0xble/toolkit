@@ -70,6 +70,15 @@ field is declared once.
   depends on the call, such as a next-page hint that repeats `--limit`, can
   be `RenderWithInput: func(w io.Writer, in In, out Out) error` instead, and
   receives the decoded input. An operation sets at most one of the two.
+- **Pages and `--fields`.** `--fields a,b` keeps those top-level keys of a
+  JSON result, or of each element of an array result. An operation whose
+  output is a page, an object with an `items` array next to envelope keys
+  such as `account`, `next_cursor` and `has_more`, sets `Paged: true`:
+  `--fields` then keeps the named keys of each item and every envelope key,
+  so `meetings --fields id,title` lists each meeting's id and title and still
+  says whether more pages exist. `Paged` is opt-in so that a tool whose
+  callers already name top-level keys, such as `--fields items,has_more`,
+  keeps its output. It is CLI-only: HTTP and MCP return the whole result.
 - **Warnings.** An operation that carries warnings in its result can declare
   `Warnings: func(out Out) []string`. In human output the CLI prints each to
   stderr as `warning: <text>` before the result (or the error, for an error
