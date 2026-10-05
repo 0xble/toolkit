@@ -352,7 +352,12 @@ func (a *app) buildType(n *node, bound map[string]bool) (reflect.Type, error) {
 		}
 		tag := fmt.Sprintf(`cmd:"" name:%q help:%q json:"-"`, c.word, nodeHelp(c))
 		if c.entry != nil && c.entry.DefaultCommand {
-			tag += ` default:"withargs" hidden:""`
+			tag += ` default:"withargs"`
+			// kong's help lists leaf commands, so hiding the only child of a
+			// group would hide the group too. Keep it listed then.
+			if len(n.children) > 1 {
+				tag += ` hidden:""`
+			}
 		}
 		tag += aliasTag(c)
 		fields = append(fields, reflect.StructField{Name: fmt.Sprintf("C%d", i), Type: t, Tag: reflect.StructTag(tag)})

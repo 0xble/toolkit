@@ -55,7 +55,10 @@ field is declared once.
 - **Default commands.** `DefaultCommand: true` makes the last CLI word the
   default subcommand of its parent: `items list` also runs as `items`, and
   `item <id> show` as `item <id>`. The word keeps working and is hidden from
-  help. Tools that grew such commands under kong keep their spelling.
+  help, unless it is its parent's only command: then help lists it, as
+  `account show`, since kong's help lists only leaf commands and hiding it
+  would hide the whole group. Tools that grew such commands under kong keep
+  their spelling.
 - **Aliases.** `Aliases: []string{"s"}` gives the last CLI word extra kong
   aliases, so `search <query>` also runs as `s <query>`. They are CLI-only:
   HTTP routes, MCP names and the operation name are unchanged. The registry

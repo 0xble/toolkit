@@ -31,3 +31,10 @@ Released versions are described in their
   and an operation input flag named `--apply` or `--dry-run`. The error names
   the operation or command, the flag and what it collides with. `cli.Run` is
   unchanged, so an existing binary keeps running until its tests catch it.
+
+### Fixed
+
+- A command group whose only child is its default command is listed in root
+  `--help` (as `account show`). The default was hidden, and kong's help lists
+  only leaf commands, so the whole group disappeared. A default command with
+  siblings stays hidden.
