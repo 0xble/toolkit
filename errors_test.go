@@ -96,7 +96,7 @@ func TestProviderErrorDetails(t *testing.T) {
 		err  *op.Error
 		want surfaces
 	}{
-		// A provider 503 as fathom reports it: a plain error kind that the
+		// A provider 503 reported as a plain error kind that the
 		// operation marks retryable.
 		{&op.Error{Kind: op.KindError, Code: "provider_unavailable", Message: "provider is down",
 			Retryable: boolPtr(true), HTTPStatus: 503, RequestID: "req_1"}, surfaces{
