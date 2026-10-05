@@ -5,6 +5,7 @@
 //	sample notes list --limit 2
 //	sample notes list --agent --fields id,title   # Paged: per item
 //	sample notes sync --fail 503 --agent          # provider error details
+//	sample notes export --out notes.json          # cli-only input
 //	sample notes create Draft          # creates: CLIImmediate
 //	sample notes create Draft --dry-run
 //	sample note n1 delete              # preview

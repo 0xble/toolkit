@@ -147,3 +147,34 @@ func TestAnyJSONOutputConforms(t *testing.T) {
 		},
 	})
 }
+
+type exportIn struct {
+	ID  string `json:"id"`
+	Out string `json:"out,omitempty" toolkit:"cli-only"`
+}
+
+// TestCLIOnlyInputsConform runs the kit over operations whose cases set a
+// cli-only input. Their CLI output differs from the remote one, which never
+// carries it, and the kit checks that HTTP and MCP refuse it.
+func TestCLIOnlyInputsConform(t *testing.T) {
+	newFixture := func(testing.TB) toolkittest.Fixture {
+		count := 0
+		r := op.New("export", "v")
+		for _, eff := range []op.Effect{op.Read, op.Write, op.Destructive} {
+			op.Add(r, op.Op[exportIn, out]{Name: "count." + string(eff), Effect: eff, MCP: true,
+				Handler: func(_ context.Context, req op.Request, in exportIn) (out, error) {
+					if req.Apply {
+						count++
+					}
+					return out{Applied: req.Apply, Surface: in.Out}, nil
+				}})
+		}
+		return toolkittest.Fixture{Registry: r, State: func() any { return count }}
+	}
+	cases := map[string]toolkittest.Case{}
+	for _, eff := range []string{"read", "write", "destructive"} {
+		cases["count."+eff] = toolkittest.Case{Input: map[string]any{"id": "a", "out": "/tmp/x"},
+			Args: []string{"count", eff, "--id", "a", "--out", "/tmp/x"}}
+	}
+	toolkittest.Run(t, toolkittest.Suite{New: newFixture, Cases: cases})
+}

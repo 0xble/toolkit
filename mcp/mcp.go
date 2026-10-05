@@ -2,10 +2,10 @@
 // tools, over stdio or streamable HTTP.
 //
 // A tool's name is the operation name with dots replaced by underscores, its
-// input schema is the registry's wire schema (including apply and confirm),
-// and its annotations follow the effect. Every call goes through the same
-// op.Entry.CallJSON path as HTTP, so validation, the apply and confirm rules
-// and authorization are identical. A failed call is an isError result whose
+// input schema is the registry's wire schema (including apply and confirm,
+// without cli-only inputs), and its annotations follow the effect. Every
+// call goes through the same op.Entry.CallJSON path as HTTP, so validation,
+// the cli-only, apply and confirm rules and authorization are identical. A failed call is an isError result whose
 // text is {"error": {code, message, suggestions}}, plus the provider details
 // of op.Error that are set.
 package mcp

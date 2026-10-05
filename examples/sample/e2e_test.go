@@ -74,6 +74,13 @@ func TestEndToEnd(t *testing.T) {
 	errCode(t, "CLI destructive apply without --yes", runErr(t, bin, 2, "--agent", "note", "n1", "delete", "--apply"), "confirmation_required")
 	errCode(t, "CLI unknown note", runErr(t, bin, 3, "--agent", "note", "n9", "show"), "note_not_found")
 	runErr(t, bin, 2, "notes", "list", "--no-such-flag")
+	exported := filepath.Join(t.TempDir(), "notes.json")
+	if out := string(run(t, bin, 0, "--agent", "notes", "export", "--out", exported)); !strings.Contains(out, `"path": "`+exported+`"`) {
+		t.Errorf("CLI export --out: %s", out)
+	}
+	if b, err := os.ReadFile(exported); err != nil || !strings.Contains(string(b), "Groceries") {
+		t.Errorf("CLI export --out wrote %q, %v", b, err)
+	}
 	unavailable := `{"error":{"code":"provider_unavailable","message":"upstream answered 503","retryable":true,"http_status":503,"request_id":"req_sample"}}`
 	if got := string(runErr(t, bin, 1, "--agent", "notes", "sync", "--fail", "503")); got !=
 		`{"error":{"code":"provider_unavailable","message":"upstream answered 503","exit_code":1,"retryable":true,"http_status":503,"request_id":"req_sample"}}`+"\n" {
@@ -130,6 +137,11 @@ func TestEndToEnd(t *testing.T) {
 		t.Errorf("HTTP rate limit: Retry-After %q, %s", resp.Header.Get("Retry-After"), b)
 	}
 	errCode(t, "HTTP bad input", post(t, hc, "notes.list", `{"limit":"many"}`, 400), "invalid_input")
+	refused := filepath.Join(dir, "refused.json")
+	errCode(t, "HTTP cli-only input", post(t, hc, "notes.export", `{"out":"`+refused+`"}`, 400), "cli_only")
+	if out := post(t, hc, "notes.export", `{}`, 200); !strings.Contains(string(out), `"notes":[`) {
+		t.Errorf("HTTP export returns the notes: %s", out)
+	}
 	errCode(t, "HTTP unknown operation", post(t, hc, "nope", `{}`, 404), "unknown_operation")
 	if out := post(t, hc, "note.delete", `{"id":"n1"}`, 200); !strings.Contains(string(out), `"applied":false`) {
 		t.Errorf("HTTP preview: %s", out)
@@ -152,6 +164,10 @@ func TestEndToEnd(t *testing.T) {
 		toolText(t, stdio, "note_delete", map[string]any{"id": "n1", "apply": true}, true), "confirmation_required")
 	if got := string(toolText(t, stdio, "notes_sync", map[string]any{"fail": 503}, true)); got != unavailable {
 		t.Errorf("stdio MCP provider error details: %s", got)
+	}
+	errCode(t, "stdio MCP cli-only input", toolText(t, stdio, "notes_export", map[string]any{"out": refused}, true), "cli_only")
+	if _, err := os.Stat(refused); !errors.Is(err, os.ErrNotExist) {
+		t.Errorf("a refused export wrote %s: %v", refused, err)
 	}
 	if out := toolText(t, stdio, "note_create", map[string]any{"title": "x"}, false); !strings.Contains(string(out), `"applied":false`) {
 		t.Errorf("stdio MCP create without apply previews despite CLIImmediate: %s", out)

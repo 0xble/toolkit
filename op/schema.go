@@ -7,6 +7,7 @@ import (
 	"slices"
 	"strconv"
 	"strings"
+	"unicode"
 
 	"github.com/google/jsonschema-go/jsonschema"
 )
@@ -69,7 +70,7 @@ func annotate(s *jsonschema.Schema, t reflect.Type) error {
 
 // jsonFields maps wire names to struct fields, following encoding/json:
 // exported fields, json:"-" skipped, anonymous structs without a json name
-// flattened.
+// flattened. Each field's Index is its full path from t.
 func jsonFields(t reflect.Type) map[string]reflect.StructField {
 	out := map[string]reflect.StructField{}
 	for i := range t.NumField() {
@@ -87,6 +88,7 @@ func jsonFields(t reflect.Type) map[string]reflect.StructField {
 			if ft.Kind() == reflect.Struct {
 				for k, v := range jsonFields(ft) {
 					if _, ok := out[k]; !ok {
+						v.Index = append([]int{i}, v.Index...)
 						out[k] = v
 					}
 				}
@@ -100,6 +102,96 @@ func jsonFields(t reflect.Type) map[string]reflect.StructField {
 			name = f.Name
 		}
 		out[name] = f
+	}
+	return out
+}
+
+// cliOnlyInput is an input field tagged toolkit:"cli-only".
+type cliOnlyInput struct {
+	json  string
+	flag  string
+	index []int
+}
+
+// tagCLIOnly is the value of the toolkit struct tag that marks an input field
+// as accepted only on the command line: toolkit:"cli-only".
+const tagCLIOnly = "cli-only"
+
+// cliOnlyInputs finds the fields tagged toolkit:"cli-only" in t, sorted by
+// json name. Such a field must be optional and have no default: a remote
+// caller can never set it, so a required one could never be satisfied, and
+// a default would be a path every remote call carries.
+func cliOnlyInputs(t reflect.Type, s *jsonschema.Schema) ([]cliOnlyInput, error) {
+	var out []cliOnlyInput
+	for name, f := range jsonFields(t) {
+		tag, ok := f.Tag.Lookup("toolkit")
+		if !ok {
+			continue
+		}
+		if tag != tagCLIOnly {
+			return nil, fmt.Errorf("field %s: unknown toolkit tag %q, want %q", f.Name, tag, tagCLIOnly)
+		}
+		if _, ok := s.Properties[name]; !ok {
+			return nil, fmt.Errorf("field %s: a cli-only input must be a wire property", f.Name)
+		}
+		if slices.Contains(s.Required, name) {
+			return nil, fmt.Errorf("field %s: a cli-only input must be optional (json omitempty), since HTTP and MCP callers can never set it", f.Name)
+		}
+		if _, ok := f.Tag.Lookup("default"); ok {
+			return nil, fmt.Errorf("field %s: a cli-only input must not have a default, since every HTTP and MCP call would carry it", f.Name)
+		}
+		out = append(out, cliOnlyInput{json: name, flag: cliSpelling(f), index: f.Index})
+	}
+	slices.SortFunc(out, func(a, b cliOnlyInput) int { return strings.Compare(a.json, b.json) })
+	return out, nil
+}
+
+// cliSpelling is how kong spells the field on the command line: --name for
+// a flag, <name> for a positional argument.
+func cliSpelling(f reflect.StructField) string {
+	name := f.Tag.Get("name")
+	if name == "" {
+		name = strings.ToLower(strings.Join(camelCase(f.Name), "-"))
+	}
+	if _, ok := f.Tag.Lookup("arg"); ok {
+		return "<" + name + ">"
+	}
+	return "--" + name
+}
+
+// camelCase splits a Go identifier into words as kong does for flag names,
+// so "IDsFrom" is "I", "Ds", "From" and "HTTPServer" is "HTTP", "Server".
+func camelCase(s string) []string {
+	var runs [][]rune
+	last := 0
+	for _, r := range s {
+		class := 4
+		switch {
+		case unicode.IsLower(r):
+			class = 1
+		case unicode.IsUpper(r):
+			class = 2
+		case unicode.IsDigit(r):
+			class = 3
+		}
+		if class == last {
+			runs[len(runs)-1] = append(runs[len(runs)-1], r)
+		} else {
+			runs = append(runs, []rune{r})
+		}
+		last = class
+	}
+	for i := 0; i < len(runs)-1; i++ {
+		if unicode.IsUpper(runs[i][0]) && unicode.IsLower(runs[i+1][0]) {
+			runs[i+1] = append([]rune{runs[i][len(runs[i])-1]}, runs[i+1]...)
+			runs[i] = runs[i][:len(runs[i])-1]
+		}
+	}
+	var out []string
+	for _, r := range runs {
+		if len(r) > 0 {
+			out = append(out, string(r))
+		}
 	}
 	return out
 }

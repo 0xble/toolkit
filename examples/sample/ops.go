@@ -2,8 +2,10 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"io"
+	"os"
 	"strconv"
 	"strings"
 
@@ -45,6 +47,19 @@ type SyncInput struct {
 // Synced is the result of a sync with the upstream service.
 type Synced struct {
 	Pulled int `json:"pulled"`
+}
+
+// ExportInput's Out names a local file, so it is cli-only: HTTP and MCP
+// neither show nor accept it, and their callers get the notes in the result.
+type ExportInput struct {
+	Out string `json:"out,omitempty" help:"Write the notes to this file instead (command line only)" toolkit:"cli-only"`
+}
+
+// Exported is the result of an export: the notes, or the file they went to.
+type Exported struct {
+	Count int    `json:"count"`
+	Notes []Note `json:"notes,omitempty"`
+	Path  string `json:"path,omitempty"`
 }
 
 type IDInput struct {
@@ -116,6 +131,23 @@ func Register(reg *op.Registry, s *Store) {
 				return Synced{}, upstreamError(in.Fail)
 			}
 			return Synced{}, nil
+		},
+	})
+	op.Add(reg, op.Op[ExportInput, Exported]{
+		Name: "notes.export", Summary: "Export every note", Effect: op.Read, MCP: true,
+		Handler: func(_ context.Context, _ op.Request, in ExportInput) (Exported, error) {
+			notes := s.Snapshot()
+			if in.Out == "" {
+				return Exported{Count: len(notes), Notes: notes}, nil
+			}
+			b, err := json.MarshalIndent(notes, "", "  ")
+			if err == nil {
+				err = os.WriteFile(in.Out, append(b, '\n'), 0o600)
+			}
+			if err != nil {
+				return Exported{}, op.Errorf(op.KindError, "export_failed", "write %s: %v", in.Out, err)
+			}
+			return Exported{Count: len(notes), Path: in.Out}, nil
 		},
 	})
 	op.Add(reg, op.Op[IDInput, Note]{
