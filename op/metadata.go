@@ -28,15 +28,18 @@ type Metadata struct {
 
 // OperationInfo describes one operation in the metadata document.
 type OperationInfo struct {
-	Name    string             `json:"name"`
-	CLI     string             `json:"cli"`
-	Aliases []string           `json:"aliases,omitempty"`
-	Summary string             `json:"summary"`
-	Effect  Effect             `json:"effect"`
-	MCP     bool               `json:"mcp"`
-	MCPName string             `json:"mcp_name"`
-	Input   *jsonschema.Schema `json:"input"`
-	Output  *jsonschema.Schema `json:"output"`
+	Name    string   `json:"name"`
+	CLI     string   `json:"cli"`
+	Aliases []string `json:"aliases,omitempty"`
+	Summary string   `json:"summary"`
+	Effect  Effect   `json:"effect"`
+	MCP     bool     `json:"mcp"`
+	MCPName string   `json:"mcp_name"`
+	// CLIImmediate is Op.CLIImmediate: the CLI applies without --apply and
+	// previews with --dry-run. HTTP and MCP still need apply.
+	CLIImmediate bool               `json:"cli_immediate,omitempty"`
+	Input        *jsonschema.Schema `json:"input"`
+	Output       *jsonschema.Schema `json:"output"`
 }
 
 // Metadata describes every operation, sorted by name.
@@ -45,7 +48,7 @@ func (r *Registry) Metadata() Metadata {
 	for _, e := range r.Entries() {
 		m.Operations = append(m.Operations, OperationInfo{
 			Name: e.Name, CLI: e.CLI(), Aliases: slices.Clone(e.Aliases), Summary: e.Summary, Effect: e.Effect,
-			MCP: e.MCP, MCPName: e.MCPName(), Input: e.InputSchema(), Output: e.OutputSchema(),
+			MCP: e.MCP, MCPName: e.MCPName(), CLIImmediate: e.CLIImmediate, Input: e.InputSchema(), Output: e.OutputSchema(),
 		})
 	}
 	return m

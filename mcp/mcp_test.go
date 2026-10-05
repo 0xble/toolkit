@@ -133,3 +133,30 @@ func TestAliasesAreNotTools(t *testing.T) {
 		t.Errorf("tools: %+v", tools.Tools)
 	}
 }
+
+func TestCLIImmediateIsToolMeta(t *testing.T) {
+	r := op.New("t", "v")
+	set := func(_ context.Context, req op.Request, _ empty) (obj, error) {
+		if req.Apply {
+			return obj{N: 1}, nil
+		}
+		return obj{}, nil
+	}
+	op.Add(r, op.Op[empty, obj]{Name: "obj.set", Effect: op.Write, MCP: true, Handler: set})
+	op.Add(r, op.Op[empty, obj]{Name: "obj.set_now", CLI: "obj set-now", Effect: op.Write, MCP: true, CLIImmediate: true, Handler: set})
+	cs := toolkittest.MCPClient(t, r, op.AllowAll)
+	tools, err := cs.ListTools(context.Background(), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	toolkittest.CheckMCPTools(t, r, tools.Tools)
+	for _, tool := range tools.Tools {
+		if _, ok := tool.Meta[mcp.MetaCLIImmediate]; ok != (tool.Name == "obj_set_now") {
+			t.Errorf("%s: _meta %v", tool.Name, tool.Meta)
+		}
+	}
+	res, err := cs.CallTool(context.Background(), &sdk.CallToolParams{Name: "obj_set_now", Arguments: map[string]any{}})
+	if err != nil || res.IsError || res.Content[0].(*sdk.TextContent).Text != `{"n":0}` {
+		t.Errorf("without apply the tool previews: %+v %v", res, err)
+	}
+}

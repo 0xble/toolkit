@@ -17,7 +17,10 @@
 // OpenAPI document match the registry, that every surface returns the same
 // output for the same input, that destructive operations refuse to apply
 // without confirm on the CLI, HTTP and MCP, and that writes only preview
-// without apply. All calls are in-process, with no network or credentials.
+// without apply. An operation with CLIImmediate is checked to apply on the
+// CLI without --apply and preview with --dry-run, while HTTP and MCP still
+// preview without apply. All calls are in-process, with no network or
+// credentials.
 package toolkittest
 
 import (
@@ -53,7 +56,8 @@ type Fixture struct {
 type Case struct {
 	// Input is the wire input without apply and confirm.
 	Input map[string]any
-	// Args select the same call on the CLI, without --apply, --yes or --json.
+	// Args select the same call on the CLI, without --apply, --dry-run, --yes
+	// or --json.
 	Args []string
 }
 
@@ -135,16 +139,22 @@ func (s Suite) checkCoverage(t *testing.T) {
 	}
 }
 
-// checkCase runs one case's call without apply on every surface, checks the
-// outputs agree and the state is unchanged, then checks the apply rules.
+// checkCase runs one case's preview on every surface, checks the outputs
+// agree and the state is unchanged, then checks the apply rules. The CLI
+// previews without --apply, or with --dry-run for an operation with
+// CLIImmediate.
 func (s Suite) checkCase(t *testing.T, name string, c Case) {
 	fx := s.New(t)
 	e := fx.Registry.Lookup(name)
 	before := snapshot(t, fx)
 
-	code, cliOut, stderr := s.cli(t, fx.Registry, append(slices.Clone(c.Args), "--agent")...)
+	preview := append(slices.Clone(c.Args), "--agent")
+	if e.CLIImmediate {
+		preview = append(preview, "--dry-run")
+	}
+	code, cliOut, stderr := s.cli(t, fx.Registry, preview...)
 	if code != 0 {
-		t.Fatalf("CLI %v: exit %d: %s", c.Args, code, stderr)
+		t.Fatalf("CLI %v: exit %d: %s", preview, code, stderr)
 	}
 	status, httpOut := httpCall(t, fx.Registry, op.AllowAll, http.MethodPost, "/ops/"+name, input(c, nil))
 	if status != http.StatusOK {
@@ -162,29 +172,47 @@ func (s Suite) checkCase(t *testing.T, name string, c Case) {
 		assertState(t, fx, before, false, "read")
 		return
 	}
-	assertState(t, fx, before, false, "preview without apply")
+	what := "preview without apply"
+	if e.CLIImmediate {
+		what = "CLI --dry-run, and HTTP and MCP without apply,"
+	}
+	assertState(t, fx, before, false, what)
 
 	if e.Effect == op.Destructive {
 		s.checkConfirm(t, fx, e, c, before)
 	}
 	s.checkDefaultAuthorizer(t, fx, e, c, before)
 
-	args := append(slices.Clone(c.Args), "--agent", "--apply")
+	args, what := applyArgs(e, c), "CLI --apply"
+	if e.CLIImmediate {
+		what = "CLI without --apply (CLIImmediate)"
+	}
 	if e.Effect == op.Destructive {
 		args = append(args, "--yes")
 	}
 	if code, _, stderr := s.cli(t, fx.Registry, args...); code != 0 {
 		t.Fatalf("CLI %v: exit %d: %s", args, code, stderr)
 	}
-	assertState(t, fx, before, true, "CLI --apply")
+	assertState(t, fx, before, true, what)
+}
+
+// applyArgs are the case's CLI args that apply, without --yes: --apply by
+// default, nothing more with CLIImmediate.
+func applyArgs(e *op.Entry, c Case) []string {
+	args := append(slices.Clone(c.Args), "--agent")
+	if !e.CLIImmediate {
+		args = append(args, "--apply")
+	}
+	return args
 }
 
 // checkConfirm checks that a destructive apply without confirm is refused,
 // with the same error, on every surface.
 func (s Suite) checkConfirm(t *testing.T, fx Fixture, e *op.Entry, c Case, before []byte) {
-	code, _, stderr := s.cli(t, fx.Registry, append(slices.Clone(c.Args), "--agent", "--apply")...)
+	args := applyArgs(e, c)
+	code, _, stderr := s.cli(t, fx.Registry, args...)
 	if code != op.KindUsage.ExitCode() || errCode(stderr) != "confirmation_required" {
-		t.Errorf("CLI --apply without --yes: exit %d, %s; want exit 2 and confirmation_required", code, stderr)
+		t.Errorf("CLI %v without --yes: exit %d, %s; want exit 2 and confirmation_required", args, code, stderr)
 	}
 	for _, extra := range []map[string]any{{"apply": true}, {"apply": true, "confirm": false}} {
 		status, body := httpCall(t, fx.Registry, op.AllowAll, http.MethodPost, "/ops/"+e.Name, input(c, extra))
@@ -253,17 +281,19 @@ func CheckMetadata(t testing.TB, doc []byte) {
 }
 
 // CheckOpenAPI checks that an OpenAPI document has exactly one POST path
-// per operation, with the registry's input and output schemas and effect.
+// per operation, with the registry's input and output schemas, effect and
+// CLIImmediate.
 func CheckOpenAPI(t testing.TB, reg *op.Registry, doc []byte) {
 	t.Helper()
 	var d struct {
 		OpenAPI string `json:"openapi"`
 		Paths   map[string]struct {
 			Post *struct {
-				OperationID string          `json:"operationId"`
-				Effect      op.Effect       `json:"x-effect"`
-				RequestBody json.RawMessage `json:"requestBody"`
-				Responses   json.RawMessage `json:"responses"`
+				OperationID  string          `json:"operationId"`
+				Effect       op.Effect       `json:"x-effect"`
+				CLIImmediate bool            `json:"x-cli-immediate"`
+				RequestBody  json.RawMessage `json:"requestBody"`
+				Responses    json.RawMessage `json:"responses"`
 			} `json:"post"`
 		} `json:"paths"`
 	}
@@ -285,8 +315,9 @@ func CheckOpenAPI(t testing.TB, reg *op.Registry, doc []byte) {
 			continue
 		}
 		p := item.Post
-		if p.OperationID != e.MCPName() || p.Effect != e.Effect {
-			t.Errorf("%s: operationId %q effect %q, want %q %q", path, p.OperationID, p.Effect, e.MCPName(), e.Effect)
+		if p.OperationID != e.MCPName() || p.Effect != e.Effect || p.CLIImmediate != e.CLIImmediate {
+			t.Errorf("%s: operationId %q effect %q x-cli-immediate %v, want %q %q %v", path,
+				p.OperationID, p.Effect, p.CLIImmediate, e.MCPName(), e.Effect, e.CLIImmediate)
 		}
 		var body struct {
 			Content map[string]struct {
@@ -309,8 +340,8 @@ func CheckOpenAPI(t testing.TB, reg *op.Registry, doc []byte) {
 }
 
 // CheckMCPTools checks that tools, from any MCP transport, are exactly the
-// registry's MCP operations, with the registry's input schemas and effect
-// annotations.
+// registry's MCP operations, with the registry's input schemas, effect
+// annotations and CLIImmediate _meta.
 func CheckMCPTools(t testing.TB, reg *op.Registry, tools []*sdk.Tool) {
 	t.Helper()
 	got := map[string]*sdk.Tool{}
@@ -335,6 +366,9 @@ func CheckMCPTools(t testing.TB, reg *op.Registry, tools []*sdk.Tool) {
 		a := tool.Annotations
 		if a == nil || a.ReadOnlyHint != (e.Effect == op.Read) || a.DestructiveHint == nil || *a.DestructiveHint != (e.Effect == op.Destructive) {
 			t.Errorf("%s: annotations %+v do not match effect %s", e.Name, a, e.Effect)
+		}
+		if now, _ := tool.Meta[mcp.MetaCLIImmediate].(bool); now != e.CLIImmediate {
+			t.Errorf("%s: _meta %s is %v, want %v", e.Name, mcp.MetaCLIImmediate, now, e.CLIImmediate)
 		}
 	}
 	if len(tools) != want {

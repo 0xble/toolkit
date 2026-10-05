@@ -170,7 +170,9 @@ func (a *app) runOp(ctx context.Context, kctx *kong.Context, l *leaf, opts Optio
 		return writeErr(opts.Stderr, format, err)
 	}
 	req := op.Request{Surface: op.SurfaceCLI, Confirm: a.root.Yes}
-	if l.apply.IsValid() {
+	if l.dryRun.IsValid() {
+		req.Apply = !l.dryRun.Bool()
+	} else if l.apply.IsValid() {
 		req.Apply = l.apply.Bool()
 	}
 	if e.Effect == op.Destructive && req.Apply && !req.Confirm && !a.root.Agent && isTerminal(opts.Stdin) {
@@ -180,22 +182,22 @@ func (a *app) runOp(ctx context.Context, kctx *kong.Context, l *leaf, opts Optio
 	if err != nil {
 		var oe *op.Error
 		if errors.As(err, &oe) && oe.Result != nil {
-			if perr := a.print(e, oe.Result, opts, format); perr != nil {
+			if perr := a.print(e, in, oe.Result, opts, format); perr != nil {
 				return writeErr(opts.Stderr, format, perr)
 			}
 		}
 		return writeErr(opts.Stderr, format, err)
 	}
-	if err := a.print(e, out, opts, format); err != nil {
+	if err := a.print(e, in, out, opts, format); err != nil {
 		return writeErr(opts.Stderr, format, err)
 	}
 	return output.ExitOK
 }
 
-// print writes an operation's output to stdout: the render hook for human
-// output, otherwise JSON filtered by --fields. Human output first prints the
-// result's warnings to stderr.
-func (a *app) print(e *op.Entry, out any, opts Options, format output.Format) error {
+// print writes an operation's output to stdout: the render hook, which also
+// sees the decoded input, for human output, otherwise JSON filtered by
+// --fields. Human output first prints the result's warnings to stderr.
+func (a *app) print(e *op.Entry, in, out any, opts Options, format output.Format) error {
 	if format != output.FormatJSON {
 		for _, w := range e.Warnings(out) {
 			if _, err := fmt.Fprintf(opts.Stderr, "warning: %s\n", w); err != nil {
@@ -204,7 +206,7 @@ func (a *app) print(e *op.Entry, out any, opts Options, format output.Format) er
 		}
 	}
 	if format != output.FormatJSON && e.CanRender() {
-		return e.Render(opts.Stdout, out)
+		return e.RenderWithInput(opts.Stdout, in, out)
 	}
 	v := out
 	if strings.TrimSpace(a.root.Fields) != "" {

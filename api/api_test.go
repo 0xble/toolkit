@@ -145,3 +145,23 @@ func TestAliasesAreNotRoutes(t *testing.T) {
 		t.Errorf("the OpenAPI document mentions the alias: %s", w.Body)
 	}
 }
+
+func TestCLIImmediateStillNeedsApply(t *testing.T) {
+	r := op.New("t", "v")
+	op.Add(r, op.Op[in, out]{Name: "thing.make", Effect: op.Write, CLIImmediate: true, Handler: func(_ context.Context, req op.Request, _ in) (out, error) {
+		return out{Applied: req.Apply}, nil
+	}})
+	op.Add(r, op.Op[in, out]{Name: "thing.plan", Effect: op.Write, Handler: func(_ context.Context, req op.Request, _ in) (out, error) {
+		return out{Applied: req.Apply}, nil
+	}})
+	h := api.Handler(r, api.Options{Authorizer: op.AllowAll})
+	if code, body := call(t, h, `{"name":"x"}`); code != 200 || strings.TrimSpace(body) != `{"applied":false}` {
+		t.Errorf("without apply HTTP previews: %d %s", code, body)
+	}
+	w := httptest.NewRecorder()
+	h.ServeHTTP(w, httptest.NewRequest(http.MethodGet, "/openapi.json", nil))
+	toolkittest.CheckOpenAPI(t, r, w.Body.Bytes())
+	if n := strings.Count(w.Body.String(), `"x-cli-immediate":true`); n != 1 {
+		t.Errorf("x-cli-immediate appears %d times, want once: %s", n, w.Body)
+	}
+}
