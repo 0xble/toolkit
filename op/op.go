@@ -64,6 +64,13 @@ type Request struct {
 // that may be any JSON value, and map[string]any any JSON object. Input field
 // tags carry both the wire shape (json) and the CLI shape (kong: arg, name,
 // short, help, default).
+//
+// An input field tagged toolkit:"cli-only", such as a flag that names a
+// local file to read or write, is accepted only on the command line. HTTP
+// and MCP input schemas and the metadata input omit it, the metadata lists
+// it in cli_only_inputs, and a call on any other surface that sets it is
+// refused with the usage error cli_only before the handler runs. The field
+// must be optional (json omitempty) and have no default.
 type Op[In, Out any] struct {
 	// Name is the canonical dotted name, e.g. "note.delete".
 	Name string
@@ -129,13 +136,21 @@ type Entry struct {
 	// CLIImmediate is Op.CLIImmediate.
 	CLIImmediate bool
 	// Paged is Op.Paged.
-	Paged   bool
-	In, Out reflect.Type
+	Paged bool
+	// CLIOnlyInputs are the json names of the input fields tagged
+	// toolkit:"cli-only", sorted.
+	CLIOnlyInputs []string
+	In, Out       reflect.Type
 
 	call     func(ctx context.Context, req Request, in any) (any, error)
 	render   func(w io.Writer, in, out any) error
 	warnings func(out any) []string
 	inSchema *jsonschema.Schema
+	cliOnly  []cliOnlyInput
+	// wire is the input schema of HTTP and MCP, without cli-only inputs.
+	// resolved validates every surface's input, so it keeps them: Call then
+	// refuses a remote caller that sets one with cli_only rather than an
+	// unknown property.
 	wire     *jsonschema.Schema
 	resolved *jsonschema.Resolved
 	out      *jsonschema.Schema
@@ -237,9 +252,19 @@ func newEntry[In, Out any](r *Registry, o Op[In, Out]) (*Entry, error) {
 	if e.Paged && !hasItemsArray(e.out) {
 		return nil, fmt.Errorf("a Paged operation needs an output object with an items array")
 	}
-	e.wire = e.buildWireSchema()
-	if e.resolved, err = e.wire.Resolve(nil); err != nil {
+	if e.cliOnly, err = cliOnlyInputs(e.In, e.inSchema); err != nil {
+		return nil, err
+	}
+	for _, f := range e.cliOnly {
+		e.CLIOnlyInputs = append(e.CLIOnlyInputs, f.json)
+	}
+	full := e.buildWireSchema()
+	if e.resolved, err = full.Resolve(nil); err != nil {
 		return nil, fmt.Errorf("resolve input schema: %w", err)
+	}
+	e.wire = cloneSchema(full)
+	for _, name := range e.CLIOnlyInputs {
+		delete(e.wire.Properties, name)
 	}
 	if _, err := newInput(e.In); err != nil {
 		return nil, err
@@ -399,8 +424,9 @@ func (r *Registry) Lookup(name string) *Entry { return r.entries[name] }
 // in every model provider's function-name grammar, so they become underscores.
 func (e *Entry) MCPName() string { return strings.ReplaceAll(e.Name, ".", "_") }
 
-// InputSchema is the JSON Schema of the wire input, including the standard
-// apply and confirm controls. The caller gets a copy.
+// InputSchema is the JSON Schema of the wire input that HTTP and MCP accept,
+// including the standard apply and confirm controls and omitting cli-only
+// inputs. The caller gets a copy.
 func (e *Entry) InputSchema() *jsonschema.Schema { return cloneSchema(e.wire) }
 
 // OutputSchema is the JSON Schema of the result. The caller gets a copy.
@@ -487,10 +513,14 @@ func (e *Entry) Decode(raw json.RawMessage) (in any, apply, confirm bool, err er
 	return in, apply, confirm, nil
 }
 
-// Call runs the handler. The apply and confirm rules are enforced here, once,
-// for every surface: reads never apply, and a destructive apply without
-// confirmation is refused before the handler runs.
+// Call runs the handler. The surface, apply and confirm rules are enforced
+// here, once, for every surface: a cli-only input set off the CLI is
+// refused, reads never apply, and a destructive apply without confirmation
+// is refused, all before the handler runs.
 func (e *Entry) Call(ctx context.Context, req Request, in any) (any, error) {
+	if err := e.checkCLIOnly(req, in); err != nil {
+		return nil, err
+	}
 	if !e.Effect.Mutates() {
 		req.Apply, req.Confirm = false, false
 	}
@@ -498,6 +528,32 @@ func (e *Entry) Call(ctx context.Context, req Request, in any) (any, error) {
 		return nil, err
 	}
 	return e.call(ctx, req, in)
+}
+
+// checkCLIOnly refuses a call that sets a cli-only input on any surface but
+// the CLI: a served tool must not read or write paths for a remote caller.
+func (e *Entry) checkCLIOnly(req Request, in any) error {
+	if req.Surface == SurfaceCLI || len(e.cliOnly) == 0 {
+		return nil
+	}
+	v := reflect.ValueOf(in)
+	for v.Kind() == reflect.Pointer || v.Kind() == reflect.Interface {
+		if v.IsNil() {
+			return nil
+		}
+		v = v.Elem()
+	}
+	if v.Type() != e.In {
+		return nil // e.call reports the mismatch
+	}
+	for _, f := range e.cliOnly {
+		if fv, err := v.FieldByIndexErr(f.index); err == nil && !fv.IsZero() {
+			return &Error{Kind: KindUsage, Code: "cli_only",
+				Message:     f.flag + " names a local path and is accepted only on the command line",
+				Suggestions: []string{"run the command line on the host, or call without " + f.json}}
+		}
+	}
+	return nil
 }
 
 func (e *Entry) checkConfirm(req Request) error {
@@ -510,14 +566,17 @@ func (e *Entry) checkConfirm(req Request) error {
 }
 
 // CallJSON is the remote path used by HTTP and MCP: decode and validate the
-// wire input, enforce confirmation, authorize, then Call. A nil authorizer
-// means DenyWrites.
+// wire input, refuse cli-only inputs, enforce confirmation, authorize, then
+// Call. A nil authorizer means DenyWrites.
 func (e *Entry) CallJSON(ctx context.Context, req Request, raw json.RawMessage, auth Authorizer) (any, error) {
 	in, apply, confirm, err := e.Decode(raw)
 	if err != nil {
 		return nil, err
 	}
 	req.Apply, req.Confirm = apply && e.Effect.Mutates(), confirm && e.Effect == Destructive
+	if err := e.checkCLIOnly(req, in); err != nil {
+		return nil, err
+	}
 	if err := e.checkConfirm(req); err != nil {
 		return nil, err
 	}

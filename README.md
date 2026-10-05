@@ -50,6 +50,17 @@ field is declared once.
   refuses applied writes. The flag shows as `cli_immediate` in the metadata,
   `x-cli-immediate` in OpenAPI and the `toolkit/cli_immediate` key of the MCP
   tool's `_meta`. Without it nothing changes.
+- **CLI-only inputs.** An input field tagged `toolkit:"cli-only"`, as in
+  ``Out string `json:"out,omitempty" toolkit:"cli-only"` ``, is accepted only
+  on the command line. Use it for a flag or argument that names a local file
+  to read or write: a served tool must not touch arbitrary paths for a
+  remote caller. The OpenAPI request schema, the MCP tool schema and the
+  metadata `input` omit the field, the metadata lists it in an optional
+  `cli_only_inputs` array, and the registry refuses an HTTP or MCP call that
+  sets it with the usage error `cli_only` (`--out names a local path and is
+  accepted only on the command line`) before confirmation, authorization or
+  the handler. The CLI is unchanged. The field must be optional (`omitempty`)
+  and have no `default`, or `op.Add` panics.
 - **CLI path.** `note <id> delete` mounts the command under `note`, with `<id>`
   a positional argument that fills the input field whose json name is `id`.
 - **Default commands.** `DefaultCommand: true` makes the last CLI word the
@@ -229,7 +240,10 @@ without `confirm` on every surface, and that writes change nothing without
 `apply`. For an operation with `CLIImmediate` it previews the CLI with
 `--dry-run`, checks that the CLI applies without `--apply` while HTTP and MCP
 still preview without `apply`, and checks that the OpenAPI and MCP documents
-carry the flag. Case `Args` never include `--apply` or `--dry-run`.
+carry the flag. Case `Args` never include `--apply` or `--dry-run`. HTTP and
+MCP calls leave out a case's cli-only inputs, and when a case sets one, the
+kit checks that HTTP and MCP refuse it with `cli_only` and change nothing,
+even applied, while the CLI accepts it.
 
 ## Tool CI
 

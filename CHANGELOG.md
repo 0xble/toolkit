@@ -7,6 +7,16 @@ Released versions are described in their
 
 ### Added
 
+- Input fields tagged `toolkit:"cli-only"` are accepted only on the command
+  line, for flags and arguments that name local files. `op.Add` records them
+  in `op.Entry.CLIOnlyInputs` and rejects one that is required or has a
+  default. HTTP and MCP calls that set one are refused in `op` with the usage
+  error `cli_only` before confirmation, authorization or the handler. The
+  OpenAPI and MCP input schemas and the metadata `input` omit them, and the
+  metadata lists them in the optional `cli_only_inputs` array
+  (`metadata.schema.json` gains the field). `toolkittest` leaves a case's
+  cli-only inputs out of HTTP and MCP calls and checks that both surfaces
+  refuse them. The sample gains `notes export --out FILE`.
 - `op.Op.Paged` (and `op.Entry.Paged`) declares an output that is a page: an
   object with an `items` array next to envelope keys such as `next_cursor`
   and `has_more`. The CLI's `--fields` then keeps the named keys of each item

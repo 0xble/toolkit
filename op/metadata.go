@@ -37,9 +37,12 @@ type OperationInfo struct {
 	MCPName string   `json:"mcp_name"`
 	// CLIImmediate is Op.CLIImmediate: the CLI applies without --apply and
 	// previews with --dry-run. HTTP and MCP still need apply.
-	CLIImmediate bool               `json:"cli_immediate,omitempty"`
-	Input        *jsonschema.Schema `json:"input"`
-	Output       *jsonschema.Schema `json:"output"`
+	CLIImmediate bool `json:"cli_immediate,omitempty"`
+	// CLIOnlyInputs is Entry.CLIOnlyInputs: input fields accepted only on
+	// the CLI. Input omits them, as the HTTP and MCP schemas do.
+	CLIOnlyInputs []string           `json:"cli_only_inputs,omitempty"`
+	Input         *jsonschema.Schema `json:"input"`
+	Output        *jsonschema.Schema `json:"output"`
 }
 
 // Metadata describes every operation, sorted by name.
@@ -48,7 +51,8 @@ func (r *Registry) Metadata() Metadata {
 	for _, e := range r.Entries() {
 		m.Operations = append(m.Operations, OperationInfo{
 			Name: e.Name, CLI: e.CLI(), Aliases: slices.Clone(e.Aliases), Summary: e.Summary, Effect: e.Effect,
-			MCP: e.MCP, MCPName: e.MCPName(), CLIImmediate: e.CLIImmediate, Input: e.InputSchema(), Output: e.OutputSchema(),
+			MCP: e.MCP, MCPName: e.MCPName(), CLIImmediate: e.CLIImmediate, CLIOnlyInputs: slices.Clone(e.CLIOnlyInputs),
+			Input: e.InputSchema(), Output: e.OutputSchema(),
 		})
 	}
 	return m

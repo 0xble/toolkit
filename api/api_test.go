@@ -165,3 +165,43 @@ func TestCLIImmediateStillNeedsApply(t *testing.T) {
 		t.Errorf("x-cli-immediate appears %d times, want once: %s", n, w.Body)
 	}
 }
+
+type exportIn struct {
+	Name string `json:"name,omitempty"`
+	Out  string `json:"out,omitempty" toolkit:"cli-only"`
+}
+
+// TestCLIOnlyInputRefused checks that the HTTP surface omits a cli-only input
+// from its schemas and refuses a body that sets it, before the handler runs.
+func TestCLIOnlyInputRefused(t *testing.T) {
+	var calls int
+	r := op.New("t", "v")
+	op.Add(r, op.Op[exportIn, out]{Name: "thing.make", Effect: op.Write, Handler: func(context.Context, op.Request, exportIn) (out, error) {
+		calls++
+		return out{}, nil
+	}})
+	h := api.Handler(r, api.Options{Authorizer: op.AllowAll})
+	code, body := call(t, h, `{"name":"x","out":"/etc/passwd","apply":true}`)
+	if code != http.StatusBadRequest || toolkittest.ErrorCode([]byte(body)) != "cli_only" ||
+		!strings.Contains(body, "--out names a local path and is accepted only on the command line") {
+		t.Errorf("cli-only input over HTTP: %d %s", code, body)
+	}
+	if calls != 0 {
+		t.Errorf("handler ran %d times", calls)
+	}
+	if code, body := call(t, h, `{"name":"x"}`); code != http.StatusOK || calls != 1 {
+		t.Errorf("without the cli-only input: %d %s", code, body)
+	}
+	w := httptest.NewRecorder()
+	h.ServeHTTP(w, httptest.NewRequest(http.MethodGet, "/openapi.json", nil))
+	toolkittest.CheckOpenAPI(t, r, w.Body.Bytes())
+	if strings.Contains(w.Body.String(), `"out"`) {
+		t.Errorf("OpenAPI document shows the cli-only input: %s", w.Body.String())
+	}
+	w = httptest.NewRecorder()
+	h.ServeHTTP(w, httptest.NewRequest(http.MethodGet, "/ops", nil))
+	toolkittest.CheckMetadata(t, w.Body.Bytes())
+	if !strings.Contains(w.Body.String(), `"cli_only_inputs":["out"]`) {
+		t.Errorf("GET /ops does not list the cli-only input: %s", w.Body.String())
+	}
+}

@@ -21,8 +21,10 @@
 // without confirm on the CLI, HTTP and MCP, and that writes only preview
 // without apply. An operation with CLIImmediate is checked to apply on the
 // CLI without --apply and preview with --dry-run, while HTTP and MCP still
-// preview without apply. All calls are in-process, with no network or
-// credentials.
+// preview without apply. HTTP and MCP calls leave out a case's cli-only
+// inputs, and when a case sets one, the kit checks that HTTP and MCP refuse
+// it with cli_only and change nothing while the CLI accepts it. All calls
+// are in-process, with no network or credentials.
 package toolkittest
 
 import (
@@ -56,7 +58,9 @@ type Fixture struct {
 
 // Case is one call of an operation, expressed for every surface.
 type Case struct {
-	// Input is the wire input without apply and confirm.
+	// Input is the wire input without apply and confirm. It may set
+	// cli-only inputs: HTTP and MCP calls leave them out, except in the
+	// check that they are refused.
 	Input map[string]any
 	// Args select the same call on the CLI, without --apply, --dry-run, --yes
 	// or --json.
@@ -158,20 +162,28 @@ func (s Suite) checkCase(t *testing.T, name string, c Case) {
 	if code != 0 {
 		t.Fatalf("CLI %v: exit %d: %s", preview, code, stderr)
 	}
-	status, httpOut := httpCall(t, fx.Registry, op.AllowAll, http.MethodPost, "/ops/"+name, input(c, nil))
+	// With a cli-only input set, the CLI and the remote surfaces make
+	// different calls, so only HTTP and MCP are compared.
+	want, against := cliOut, "CLI output"
+	status, httpOut := httpCall(t, fx.Registry, op.AllowAll, http.MethodPost, "/ops/"+name, remoteInput(e, c, nil))
 	if status != http.StatusOK {
 		t.Fatalf("HTTP %s: status %d: %s", name, status, httpOut)
 	}
-	assertSameJSON(t, "HTTP output vs CLI output", cliOut, httpOut)
+	if len(setCLIOnly(e, c)) > 0 {
+		want, against = httpOut, "HTTP output"
+	} else {
+		assertSameJSON(t, "HTTP output vs CLI output", cliOut, httpOut)
+	}
 	if e.MCP {
-		res := mcpCall(t, fx.Registry, op.AllowAll, e, input(c, nil))
+		res := mcpCall(t, fx.Registry, op.AllowAll, e, remoteInput(e, c, nil))
 		if res.IsError {
 			t.Fatalf("MCP %s: %s", e.MCPName(), text(res))
 		}
-		assertSameJSON(t, "MCP output vs CLI output", cliOut, []byte(text(res)))
+		assertSameJSON(t, "MCP output vs "+against, want, []byte(text(res)))
 	}
 	if !e.Effect.Mutates() {
 		assertState(t, fx, before, false, "read")
+		s.checkCLIOnly(t, fx, e, c, before)
 		return
 	}
 	what := "preview without apply"
@@ -180,6 +192,7 @@ func (s Suite) checkCase(t *testing.T, name string, c Case) {
 	}
 	assertState(t, fx, before, false, what)
 
+	s.checkCLIOnly(t, fx, e, c, before)
 	if e.Effect == op.Destructive {
 		s.checkConfirm(t, fx, e, c, before)
 	}
@@ -217,12 +230,12 @@ func (s Suite) checkConfirm(t *testing.T, fx Fixture, e *op.Entry, c Case, befor
 		t.Errorf("CLI %v without --yes: exit %d, %s; want exit 2 and confirmation_required", args, code, stderr)
 	}
 	for _, extra := range []map[string]any{{"apply": true}, {"apply": true, "confirm": false}} {
-		status, body := httpCall(t, fx.Registry, op.AllowAll, http.MethodPost, "/ops/"+e.Name, input(c, extra))
+		status, body := httpCall(t, fx.Registry, op.AllowAll, http.MethodPost, "/ops/"+e.Name, remoteInput(e, c, extra))
 		if status != http.StatusBadRequest || errCode(body) != "confirmation_required" {
 			t.Errorf("HTTP %v: status %d, %s; want 400 and confirmation_required", extra, status, body)
 		}
 		if e.MCP {
-			res := mcpCall(t, fx.Registry, op.AllowAll, e, input(c, extra))
+			res := mcpCall(t, fx.Registry, op.AllowAll, e, remoteInput(e, c, extra))
 			if !res.IsError || errCode([]byte(text(res))) != "confirmation_required" {
 				t.Errorf("MCP %v: %s; want isError and confirmation_required", extra, text(res))
 			}
@@ -237,17 +250,49 @@ func (s Suite) checkDefaultAuthorizer(t *testing.T, fx Fixture, e *op.Entry, c C
 	if e.Effect == op.Destructive {
 		extra["confirm"] = true
 	}
-	status, body := httpCall(t, fx.Registry, nil, http.MethodPost, "/ops/"+e.Name, input(c, extra))
+	status, body := httpCall(t, fx.Registry, nil, http.MethodPost, "/ops/"+e.Name, remoteInput(e, c, extra))
 	if status != http.StatusForbidden || errCode(body) != "write_not_authorized" {
 		t.Errorf("HTTP apply with the default authorizer: status %d, %s; want 403 and write_not_authorized", status, body)
 	}
 	if e.MCP {
-		res := mcpCall(t, fx.Registry, nil, e, input(c, extra))
+		res := mcpCall(t, fx.Registry, nil, e, remoteInput(e, c, extra))
 		if !res.IsError || errCode([]byte(text(res))) != "write_not_authorized" {
 			t.Errorf("MCP apply with the default authorizer: %s; want isError and write_not_authorized", text(res))
 		}
 	}
 	assertState(t, fx, before, false, "apply refused by the default authorizer")
+}
+
+// checkCLIOnly checks that HTTP and MCP refuse a case's cli-only inputs with
+// cli_only and change nothing, even when the call applies with confirmation
+// and an allow-all authorizer. checkCase has already run the CLI with them.
+func (s Suite) checkCLIOnly(t *testing.T, fx Fixture, e *op.Entry, c Case, before []byte) {
+	set := setCLIOnly(e, c)
+	if len(set) == 0 {
+		return
+	}
+	extra := map[string]any{}
+	if e.Effect.Mutates() {
+		extra["apply"] = true
+	}
+	if e.Effect == op.Destructive {
+		extra["confirm"] = true
+	}
+	for _, name := range set {
+		in := remoteInput(e, c, extra)
+		in[name] = c.Input[name]
+		status, body := httpCall(t, fx.Registry, op.AllowAll, http.MethodPost, "/ops/"+e.Name, in)
+		if status != http.StatusBadRequest || errCode(body) != "cli_only" {
+			t.Errorf("HTTP with cli-only input %s: status %d, %s; want 400 and cli_only", name, status, body)
+		}
+		if e.MCP {
+			res := mcpCall(t, fx.Registry, op.AllowAll, e, in)
+			if !res.IsError || errCode([]byte(text(res))) != "cli_only" {
+				t.Errorf("MCP with cli-only input %s: %s; want isError and cli_only", name, text(res))
+			}
+		}
+	}
+	assertState(t, fx, before, false, "HTTP and MCP calls with cli-only inputs")
 }
 
 // CheckMetadata validates a metadata document against toolkit.metadata.v1.
@@ -278,6 +323,11 @@ func CheckMetadata(t testing.TB, doc []byte) {
 		}
 		if o.Input.Type != "object" {
 			t.Errorf("%s: input schema type is %q, want object", o.Name, o.Input.Type)
+		}
+		for _, name := range o.CLIOnlyInputs {
+			if _, ok := o.Input.Properties[name]; ok {
+				t.Errorf("%s: input schema shows cli-only input %s", o.Name, name)
+			}
 		}
 	}
 }
@@ -433,15 +483,43 @@ func mcpCall(t testing.TB, reg *op.Registry, auth op.Authorizer, e *op.Entry, ar
 	return res
 }
 
-func input(c Case, extra map[string]any) map[string]any {
+// remoteInput is the case's input for HTTP and MCP: without its cli-only
+// inputs, plus extra.
+func remoteInput(e *op.Entry, c Case, extra map[string]any) map[string]any {
 	m := map[string]any{}
 	for k, v := range c.Input {
-		m[k] = v
+		if !slices.Contains(e.CLIOnlyInputs, k) {
+			m[k] = v
+		}
 	}
 	for k, v := range extra {
 		m[k] = v
 	}
 	return m
+}
+
+// setCLIOnly lists the cli-only inputs the case sets to a non-empty value.
+func setCLIOnly(e *op.Entry, c Case) []string {
+	var out []string
+	for _, name := range e.CLIOnlyInputs {
+		v, ok := c.Input[name]
+		if !ok || v == nil {
+			continue
+		}
+		rv := reflect.ValueOf(v)
+		switch rv.Kind() {
+		case reflect.Slice, reflect.Map, reflect.String:
+			if rv.Len() == 0 {
+				continue
+			}
+		default:
+			if rv.IsZero() {
+				continue
+			}
+		}
+		out = append(out, name)
+	}
+	return out
 }
 
 func text(res *sdk.CallToolResult) string {

@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"testing"
 
+	"github.com/google/jsonschema-go/jsonschema"
 	sdk "github.com/modelcontextprotocol/go-sdk/mcp"
 
 	"github.com/0xble/toolkit/mcp"
@@ -158,5 +159,40 @@ func TestCLIImmediateIsToolMeta(t *testing.T) {
 	res, err := cs.CallTool(context.Background(), &sdk.CallToolParams{Name: "obj_set_now", Arguments: map[string]any{}})
 	if err != nil || res.IsError || res.Content[0].(*sdk.TextContent).Text != `{"n":0}` {
 		t.Errorf("without apply the tool previews: %+v %v", res, err)
+	}
+}
+
+type exportIn struct {
+	Out string `json:"out,omitempty" toolkit:"cli-only"`
+}
+
+// TestCLIOnlyInputRefused checks that a tool's input schema omits a cli-only
+// input and that a call setting it is refused before the handler runs.
+func TestCLIOnlyInputRefused(t *testing.T) {
+	var calls int
+	r := op.New("t", "v")
+	op.Add(r, op.Op[exportIn, obj]{Name: "notes.export", Effect: op.Read, MCP: true, Handler: func(context.Context, op.Request, exportIn) (obj, error) {
+		calls++
+		return obj{}, nil
+	}})
+	if _, ok := mcp.Tool(r.Lookup("notes.export")).InputSchema.(*jsonschema.Schema).Properties["out"]; ok {
+		t.Error("the tool input schema shows the cli-only input")
+	}
+	cs := toolkittest.MCPClient(t, r, op.AllowAll)
+	tools, err := cs.ListTools(context.Background(), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	toolkittest.CheckMCPTools(t, r, tools.Tools)
+	res, err := cs.CallTool(context.Background(), &sdk.CallToolParams{Name: "notes_export", Arguments: map[string]any{"out": "/tmp/x"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	text := res.Content[0].(*sdk.TextContent).Text
+	if !res.IsError || toolkittest.ErrorCode([]byte(text)) != "cli_only" {
+		t.Errorf("cli-only input over MCP: %s %v", text, err)
+	}
+	if calls != 0 {
+		t.Errorf("handler ran %d times", calls)
 	}
 }
