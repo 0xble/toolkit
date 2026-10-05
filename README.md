@@ -55,7 +55,10 @@ field is declared once.
 - **Default commands.** `DefaultCommand: true` makes the last CLI word the
   default subcommand of its parent: `items list` also runs as `items`, and
   `item <id> show` as `item <id>`. The word keeps working and is hidden from
-  help. Tools that grew such commands under kong keep their spelling.
+  help, unless it is its parent's only command: then help lists it, as
+  `account show`, since kong's help lists only leaf commands and hiding it
+  would hide the whole group. Tools that grew such commands under kong keep
+  their spelling.
 - **Aliases.** `Aliases: []string{"s"}` gives the last CLI word extra kong
   aliases, so `search <query>` also runs as `s <query>`. They are CLI-only:
   HTTP routes, MCP names and the operation name are unchanged. The registry
@@ -65,11 +68,30 @@ field is declared once.
   `--account`) whose json tag names an input field. They fill that field in
   every operation that has it, so `tool --limit 5 notes list` and
   `tool notes list --limit 5` are the same call.
+- **Reserved flags.** kong parses a command flag that reuses a root flag's
+  name, alias or short form as the root flag, so the command never sees it:
+  an input field named `version` would print the tool's version instead.
+  `cli.Validate`, and so the conformance kit, rejects such a flag, whether
+  it shadows a toolkit flag (`--json`/`-j`, `--agent`, `--fields`,
+  `--yes`/`-y`, `--version`, `--help`/`-h`) or one of the tool's own root
+  flags, and rejects an operation input flag named `--apply` or `--dry-run`.
+  Rename it with a kong `name` tag, as in `name:"at-version"`. It is not
+  overridable. `Run` does not repeat the check, so a binary that already
+  ships such a flag keeps running.
 - **Output.** `--json` or `--agent` prints JSON. Otherwise the CLI uses the
   operation's `Render` hook if it has one, and JSON if not. A hook whose text
   depends on the call, such as a next-page hint that repeats `--limit`, can
   be `RenderWithInput: func(w io.Writer, in In, out Out) error` instead, and
   receives the decoded input. An operation sets at most one of the two.
+- **Pages and `--fields`.** `--fields a,b` keeps those top-level keys of a
+  JSON result, or of each element of an array result. An operation whose
+  output is a page, an object with an `items` array next to envelope keys
+  such as `account`, `next_cursor` and `has_more`, sets `Paged: true`:
+  `--fields` then keeps the named keys of each item and every envelope key,
+  so `meetings --fields id,title` lists each meeting's id and title and still
+  says whether more pages exist. `Paged` is opt-in so that a tool whose
+  callers already name top-level keys, such as `--fields items,has_more`,
+  keeps its output. It is CLI-only: HTTP and MCP return the whole result.
 - **Warnings.** An operation that carries warnings in its result can declare
   `Warnings: func(out Out) []string`. In human output the CLI prints each to
   stderr as `warning: <text>` before the result (or the error, for an error
@@ -89,7 +111,6 @@ field is declared once.
   produced before the failure in `Error.Result` (for example the report of a
   batch that stopped part way): the CLI prints it to stdout and the error to
   stderr, and HTTP and MCP add it to the error body as `"result"`.
-
 | Kind | Exit | HTTP |
 | --- | --- | --- |
 | (success) | 0 | 200 |
@@ -103,6 +124,22 @@ field is declared once.
 | `stale_index` | 8 | 503 |
 | `model_unavailable` | 9 | 503 |
 | `partial` | 10 | 207 |
+
+- **Provider error details.** A failure that came from a provider response
+  can say how to retry. `op.Error` has optional `Retryable` (a `*bool`),
+  `HTTPStatus` (the provider's status, not the toolkit's), `RetryAfterSeconds`
+  and `RequestID`. Each is printed only when set, as `retryable`,
+  `http_status`, `retry_after_seconds` and `request_id`, in the CLI JSON
+  envelope, the HTTP error body and the MCP error text alike, so an error
+  without them prints exactly what it printed before. The CLI envelope has
+  always derived `retryable: true` for the `rate` and `timeout` kinds and
+  still does. `Retryable` overrides that everywhere, `false` included. HTTP
+  also sends `RetryAfterSeconds` as a `Retry-After` header. Carry only
+  sanitized values.
+
+  ```json
+  {"error":{"code":"provider_unavailable","message":"upstream answered 503","exit_code":1,"retryable":true,"http_status":503,"request_id":"req_sample"}}
+  ```
 
 - **Serving.** `tool serve --socket PATH` listens on a Unix socket created
   with mode `0600` and serves `GET /ops`, `POST /ops/{name}`,
@@ -163,7 +200,8 @@ notes metadata --json
 ```
 
 [`examples/sample`](examples/sample) is a complete tool with read, write and
-destructive operations, an immediate CLI write, root flags and render hooks,
+destructive operations, an immediate CLI write, a paged list, provider error
+details, root flags and render hooks,
 plus the conformance and end-to-end tests that drive its real binary over
 every surface.
 
@@ -183,7 +221,8 @@ func TestConformance(t *testing.T) {
 }
 ```
 
-It checks that the metadata is valid `toolkit.metadata.v1`, that MCP
+It checks that `cli.Validate` accepts the command tree, including the
+reserved flags, that the metadata is valid `toolkit.metadata.v1`, that MCP
 `tools/list` and the OpenAPI document match the registry, that the CLI, HTTP
 and MCP return the same output, that destructive operations refuse to apply
 without `confirm` on every surface, and that writes change nothing without

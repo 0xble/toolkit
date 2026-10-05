@@ -60,11 +60,31 @@ func (k Kind) HTTPStatus() int {
 
 // Error is the one error type operations return. Its wire form,
 // {code, message, suggestions}, is the same on every surface.
+//
+// A failure that came from a provider response may also carry the details a
+// caller needs to classify it and schedule a retry: Retryable, HTTPStatus,
+// RetryAfterSeconds and RequestID. Each is added to the CLI JSON envelope,
+// the HTTP error body and the MCP error result only when set, under the same
+// key on every surface, so an error without them is unchanged. Carry only
+// sanitized values: they reach every caller.
 type Error struct {
 	Kind        Kind     `json:"-"`
 	Code        string   `json:"code"`
 	Message     string   `json:"message"`
 	Suggestions []string `json:"suggestions,omitempty"`
+	// Retryable overrides whether a caller may retry. Unset, the CLI
+	// envelope derives it from the kind (rate and timeout are retryable) and
+	// HTTP and MCP omit it. Set, every surface prints it, false included.
+	Retryable *bool `json:"retryable,omitempty"`
+	// HTTPStatus is the status of the failed provider response, such as 503.
+	// It is not the status of the toolkit's own HTTP response, which follows
+	// the kind.
+	HTTPStatus int `json:"http_status,omitempty"`
+	// RetryAfterSeconds is how long the provider asked the caller to wait.
+	// The HTTP surface also sends it as a Retry-After header.
+	RetryAfterSeconds int `json:"retry_after_seconds,omitempty"`
+	// RequestID is the provider's identifier of the failed request.
+	RequestID string `json:"request_id,omitempty"`
 	// Result is output the operation produced before it failed, such as the
 	// per-item report of a batch that stopped part way. It must have the
 	// operation's output type. Every surface returns it with the error: the
@@ -114,10 +134,17 @@ func kindForExit(code int) Kind {
 }
 
 // CLIError converts the error to the shared output package's CLI error, so a
-// tool's JSON error envelope and exit code stay as they are today.
+// tool's JSON error envelope and exit code stay as they are today. Its
+// Retryable is the Retryable override, or else true for the rate and timeout
+// kinds. The other provider details have no place in output.CLIError: the
+// cli package adds them to the envelope it prints.
 func (e *Error) CLIError() *output.CLIError {
+	retryable := e.Kind == KindRate || e.Kind == KindTimeout
+	if e.Retryable != nil {
+		retryable = *e.Retryable
+	}
 	return &output.CLIError{Code: e.Code, Message: e.Message, Suggestions: e.Suggestions, ExitCode: e.Kind.ExitCode(),
-		Retryable: e.Kind == KindRate || e.Kind == KindTimeout}
+		Retryable: retryable}
 }
 
 // Authorizer decides whether a remote caller may run an operation. The HTTP

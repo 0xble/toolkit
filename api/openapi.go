@@ -69,6 +69,11 @@ func errorSchema() *jsonschema.Schema {
 				"code":        str,
 				"message":     str,
 				"suggestions": {Type: "array", Items: str},
+				"retryable":   {Type: "boolean", Description: "Whether the caller may retry, when the operation says so"},
+				"http_status": {Type: "integer", Description: "Status of the failed provider response"},
+				"retry_after_seconds": {Type: "integer",
+					Description: "Seconds the provider asked the caller to wait, also sent as Retry-After"},
+				"request_id": {Type: "string", Description: "Provider identifier of the failed request"},
 			},
 		}},
 	}

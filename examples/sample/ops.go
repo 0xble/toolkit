@@ -30,9 +30,21 @@ type ListInput struct {
 	Tag string `json:"tag,omitempty" help:"Only notes with this tag"`
 }
 
+// NotesPage is one page of notes. notes.list declares it Paged, so
+// `--fields id,title` keeps those keys of each item and the whole envelope.
 type NotesPage struct {
-	Notes []Note `json:"notes"`
-	Next  string `json:"next,omitempty"`
+	Items      []Note `json:"items"`
+	NextCursor string `json:"next_cursor,omitempty"`
+	HasMore    bool   `json:"has_more"`
+}
+
+type SyncInput struct {
+	Fail int `json:"fail,omitempty" help:"Make the fake upstream answer with this HTTP status, such as 429 or 503"`
+}
+
+// Synced is the result of a sync with the upstream service.
+type Synced struct {
+	Pulled int `json:"pulled"`
 }
 
 type IDInput struct {
@@ -59,7 +71,7 @@ type Change struct {
 // Register declares the sample's operations on reg.
 func Register(reg *op.Registry, s *Store) {
 	op.Add(reg, op.Op[ListInput, NotesPage]{
-		Name: "notes.list", Summary: "List notes", Effect: op.Read, MCP: true,
+		Name: "notes.list", Summary: "List notes", Effect: op.Read, MCP: true, Paged: true,
 		Handler: func(_ context.Context, _ op.Request, in ListInput) (NotesPage, error) {
 			start := 0
 			if in.Cursor != "" {
@@ -70,29 +82,40 @@ func Register(reg *op.Registry, s *Store) {
 				start = n
 			}
 			notes, next := s.List(in.Tag, start, in.Limit)
-			p := NotesPage{Notes: notes}
+			p := NotesPage{Items: notes}
 			if next > 0 {
-				p.Next = strconv.Itoa(next)
+				p.NextCursor, p.HasMore = strconv.Itoa(next), true
 			}
 			return p, nil
 		},
 		// The next-page hint repeats the caller's filters, so the render hook
 		// reads them from the input rather than from hidden result fields.
 		RenderWithInput: func(w io.Writer, in ListInput, p NotesPage) error {
-			rows := make([][]string, 0, len(p.Notes))
-			for _, n := range p.Notes {
+			rows := make([][]string, 0, len(p.Items))
+			for _, n := range p.Items {
 				rows = append(rows, []string{n.ID, n.Title, strings.Join(n.Tags, ",")})
 			}
 			output.PrintTable(w, []string{"ID", "TITLE", "TAGS"}, rows)
-			if p.Next == "" {
+			if !p.HasMore {
 				return nil
 			}
-			hint := fmt.Sprintf("--limit %d --cursor %s", in.Limit, p.Next)
+			hint := fmt.Sprintf("--limit %d --cursor %s", in.Limit, p.NextCursor)
 			if in.Tag != "" {
 				hint = "--tag " + in.Tag + " " + hint
 			}
 			_, err := fmt.Fprintf(w, "next page: sample notes list %s\n", hint)
 			return err
+		},
+	})
+	op.Add(reg, op.Op[SyncInput, Synced]{
+		// A provider call: its failures carry the provider's status, request
+		// ID, Retry-After and whether to retry, on every surface.
+		Name: "notes.sync", Summary: "Pull notes from the upstream service", Effect: op.Read, MCP: true,
+		Handler: func(_ context.Context, _ op.Request, in SyncInput) (Synced, error) {
+			if in.Fail != 0 {
+				return Synced{}, upstreamError(in.Fail)
+			}
+			return Synced{}, nil
 		},
 	})
 	op.Add(reg, op.Op[IDInput, Note]{

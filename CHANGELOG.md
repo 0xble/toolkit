@@ -7,24 +7,34 @@ Released versions are described in their
 
 ### Added
 
-- `op.Op.CLIImmediate`: the CLI applies a write or destructive operation
-  without `--apply`, previews with a generated `--dry-run`, and keeps
-  accepting `--apply` as a hidden no-op. Destructive operations still need
-  `--yes` or a confirmed prompt. HTTP and MCP still need `"apply": true`, and
-  `serve` still denies applied writes by default. Exposed as `cli_immediate`
-  in `toolkit.metadata.v1`, `x-cli-immediate` in OpenAPI and
-  `mcp.MetaCLIImmediate` (`toolkit/cli_immediate`) in MCP tool `_meta`.
-- `op.Op.RenderWithInput`: a render hook that also receives the decoded
-  input, and `op.Entry.RenderWithInput`. `Render` and `Entry.Render` are
-  unchanged.
-- `toolkittest` checks `CLIImmediate` operations: `--dry-run` previews, the
-  CLI applies without `--apply`, HTTP and MCP still need `apply`, and
-  destructive operations still need confirmation on every surface.
+- `op.Op.Paged` (and `op.Entry.Paged`) declares an output that is a page: an
+  object with an `items` array next to envelope keys such as `next_cursor`
+  and `has_more`. The CLI's `--fields` then keeps the named keys of each item
+  and every envelope key, so `meetings --fields id,title` no longer prints
+  `{}`. Without `Paged`, `--fields` still keeps top-level keys, so no existing
+  output changes. `op.Add` rejects `Paged` on an output without an `items`
+  array.
+- `op.Error` carries optional provider details: `Retryable` (`*bool`),
+  `HTTPStatus`, `RetryAfterSeconds` and `RequestID`, printed only when set
+  as `retryable`, `http_status`, `retry_after_seconds` and `request_id` in
+  the CLI JSON envelope, the HTTP error body and the MCP error text.
+  `Retryable` overrides the CLI's kind-derived value. HTTP also sends a
+  `Retry-After` header, and the OpenAPI error schema lists the four keys.
+  Envelopes of errors without details are byte-identical to v0.1.4.
+
+### Changed
+
+- `cli.Validate`, and with it the `toolkittest` command-tree check, rejects a
+  command flag that kong would silently parse as a root flag: one reusing the
+  name, an alias or the short form of `--json`/`-j`, `--agent`, `--fields`,
+  `--yes`/`-y`, `--version`, `--help`/`-h` or one of the tool's `Globals`,
+  and an operation input flag named `--apply` or `--dry-run`. The error names
+  the operation or command, the flag and what it collides with. `cli.Run` is
+  unchanged, so an existing binary keeps running until its tests catch it.
 
 ### Fixed
 
-- The tool template's `bin/ci` runs `lane_mod` (`go mod verify` and
-  `go mod tidy -diff`) in the `gate` and `nightly` profiles, not only in
-  `preflight`. Tools could merge with a test-only dependency marked
-  `// indirect`, and the goreleaser `go mod tidy` hook then rewrote `go.mod`
-  after the release was tagged.
+- A command group whose only child is its default command is listed in root
+  `--help` (as `account show`). The default was hidden, and kong's help lists
+  only leaf commands, so the whole group disappeared. A default command with
+  siblings stays hidden.

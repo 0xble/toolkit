@@ -13,9 +13,11 @@
 //		})
 //	}
 //
-// It checks that the metadata is schema-valid, that MCP tools/list and the
-// OpenAPI document match the registry, that every surface returns the same
-// output for the same input, that destructive operations refuse to apply
+// It checks that cli.Validate accepts the command tree (which rejects an
+// operation flag that a root flag such as --version would swallow), that the
+// metadata is schema-valid, that MCP tools/list and the OpenAPI document
+// match the registry, that every surface returns the same output for the
+// same input, that destructive operations refuse to apply
 // without confirm on the CLI, HTTP and MCP, and that writes only preview
 // without apply. An operation with CLIImmediate is checked to apply on the
 // CLI without --apply and preview with --dry-run, while HTTP and MCP still
@@ -77,7 +79,7 @@ type Suite struct {
 func Run(t *testing.T, s Suite) {
 	t.Run("cli_tree", func(t *testing.T) {
 		if err := cli.Validate(s.New(t).Registry, toolkit.CLIOptions(s.Options)); err != nil {
-			t.Fatalf("kong rejects the command tree: %v", err)
+			t.Fatalf("invalid command tree: %v", err)
 		}
 	})
 	t.Run("metadata", func(t *testing.T) {

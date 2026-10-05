@@ -7,7 +7,8 @@
 // Every operation is a POST so structured input keeps its body; the effect,
 // not the HTTP verb, says whether it changes state. A success returns the
 // operation output as the body. A failure returns {"error": {code, message,
-// suggestions}} with the status of the error kind.
+// suggestions}} with the status of the error kind, plus the provider details
+// of op.Error that are set.
 package api
 
 import (
@@ -15,6 +16,7 @@ import (
 	"errors"
 	"io"
 	"net/http"
+	"strconv"
 
 	"github.com/0xble/toolkit/op"
 )
@@ -80,9 +82,13 @@ type ErrorBody struct {
 	Result any       `json:"result,omitempty"`
 }
 
-// WriteError writes err as an ErrorBody with the status of its kind.
+// WriteError writes err as an ErrorBody with the status of its kind. An
+// error with RetryAfterSeconds also gets a Retry-After header.
 func WriteError(w http.ResponseWriter, err error) {
 	oe := op.AsError(err, op.KindError)
+	if oe.RetryAfterSeconds > 0 {
+		w.Header().Set("Retry-After", strconv.Itoa(oe.RetryAfterSeconds))
+	}
 	writeJSON(w, oe.Kind.HTTPStatus(), ErrorBody{Error: oe, Result: oe.Result})
 }
 

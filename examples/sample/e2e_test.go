@@ -49,6 +49,9 @@ func TestEndToEnd(t *testing.T) {
 	if out := string(run(t, bin, 0, "--limit", "2", "notes", "list")); !strings.Contains(out, "next page: sample notes list --limit 2 --cursor 2") {
 		t.Errorf("the render hook repeats the caller's --limit from the input: %s", out)
 	}
+	same(t, "--fields on a Paged operation projects each item and keeps the envelope",
+		[]byte(`{"items":[{"id":"n1","title":"Groceries"},{"id":"n2","title":"Standup"}],"next_cursor":"2","has_more":true}`),
+		run(t, bin, 0, "--agent", "--limit", "2", "--fields", "id,title", "notes", "list"))
 	if out := run(t, bin, 0, "--agent", "notes", "create", "Draft"); !strings.Contains(string(out), `"applied": true`) {
 		t.Errorf("CLIImmediate create applies without --apply: %s", out)
 	}
@@ -71,6 +74,14 @@ func TestEndToEnd(t *testing.T) {
 	errCode(t, "CLI destructive apply without --yes", runErr(t, bin, 2, "--agent", "note", "n1", "delete", "--apply"), "confirmation_required")
 	errCode(t, "CLI unknown note", runErr(t, bin, 3, "--agent", "note", "n9", "show"), "note_not_found")
 	runErr(t, bin, 2, "notes", "list", "--no-such-flag")
+	unavailable := `{"error":{"code":"provider_unavailable","message":"upstream answered 503","retryable":true,"http_status":503,"request_id":"req_sample"}}`
+	if got := string(runErr(t, bin, 1, "--agent", "notes", "sync", "--fail", "503")); got !=
+		`{"error":{"code":"provider_unavailable","message":"upstream answered 503","exit_code":1,"retryable":true,"http_status":503,"request_id":"req_sample"}}`+"\n" {
+		t.Errorf("CLI provider error details: %s", got)
+	}
+	if got := string(runErr(t, bin, 6, "--agent", "notes", "sync", "--fail", "429")); !strings.Contains(got, `"exit_code":6,"retryable":true,"http_status":429,"retry_after_seconds":30,`) {
+		t.Errorf("CLI rate limit details: %s", got)
+	}
 	if out := run(t, bin, 0, "--agent", "note", "n1", "delete", "--apply", "--yes"); !strings.Contains(string(out), `"applied": true`) {
 		t.Errorf("delete --apply --yes should apply: %s", out)
 	}
@@ -108,6 +119,16 @@ func TestEndToEnd(t *testing.T) {
 	if out := post(t, hc, "note.create", `{"title":"x"}`, 200); !strings.Contains(string(out), `"applied":false`) {
 		t.Errorf("HTTP create without apply previews despite CLIImmediate: %s", out)
 	}
+	if got := strings.TrimSpace(string(post(t, hc, "notes.sync", `{"fail":503}`, 500))); got != unavailable {
+		t.Errorf("HTTP provider error details: %s", got)
+	}
+	resp, err := hc.Post("http://sample/ops/notes.sync", "application/json", strings.NewReader(`{"fail":429}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if b := body(t, resp, "POST notes.sync 429", 429); resp.Header.Get("Retry-After") != "30" || !strings.Contains(string(b), `"retry_after_seconds":30`) {
+		t.Errorf("HTTP rate limit: Retry-After %q, %s", resp.Header.Get("Retry-After"), b)
+	}
 	errCode(t, "HTTP bad input", post(t, hc, "notes.list", `{"limit":"many"}`, 400), "invalid_input")
 	errCode(t, "HTTP unknown operation", post(t, hc, "nope", `{}`, 404), "unknown_operation")
 	if out := post(t, hc, "note.delete", `{"id":"n1"}`, 200); !strings.Contains(string(out), `"applied":false`) {
@@ -129,6 +150,9 @@ func TestEndToEnd(t *testing.T) {
 	same(t, "stdio MCP vs CLI", listJSON, toolText(t, stdio, "notes_list", map[string]any{"limit": 1}, false))
 	errCode(t, "stdio MCP destructive apply without confirm",
 		toolText(t, stdio, "note_delete", map[string]any{"id": "n1", "apply": true}, true), "confirmation_required")
+	if got := string(toolText(t, stdio, "notes_sync", map[string]any{"fail": 503}, true)); got != unavailable {
+		t.Errorf("stdio MCP provider error details: %s", got)
+	}
 	if out := toolText(t, stdio, "note_create", map[string]any{"title": "x"}, false); !strings.Contains(string(out), `"applied":false`) {
 		t.Errorf("stdio MCP create without apply previews despite CLIImmediate: %s", out)
 	}
@@ -139,7 +163,7 @@ func TestEndToEnd(t *testing.T) {
 		t.Errorf("stdio MCP apply with confirm: %s", out)
 	}
 	var page NotesPage
-	if err := json.Unmarshal(toolText(t, stdio, "notes_list", map[string]any{}, false), &page); err != nil || len(page.Notes) != 2 {
+	if err := json.Unmarshal(toolText(t, stdio, "notes_list", map[string]any{}, false), &page); err != nil || len(page.Items) != 2 {
 		t.Errorf("after the stdio delete: %+v, %v; want 2 notes", page, err)
 	}
 	if _, err := stdio.CallTool(ctx, &sdk.CallToolParams{Name: "note_rename", Arguments: map[string]any{}}); err == nil {

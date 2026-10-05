@@ -82,6 +82,28 @@ func TestDefaultCommand(t *testing.T) {
 	}
 }
 
+// TestOnlyDefaultChildIsListed checks that a group whose only child is its
+// default command still appears in root help, as that command.
+func TestOnlyDefaultChildIsListed(t *testing.T) {
+	r := defaults()
+	op.Add(r, op.Op[listIn, result]{Name: "account.show", CLI: "account show", Summary: "Show the account", Effect: op.Read,
+		DefaultCommand: true, Aliases: []string{"list"},
+		Handler: func(_ context.Context, _ op.Request, in listIn) (result, error) { return result{In: in}, nil },
+	})
+	_, help, _ := run(t, r, "--help")
+	if !strings.Contains(help, "account show") || !strings.Contains(help, "Show the account") {
+		t.Errorf("a group whose only child is the default is missing from help:\n%s", help)
+	}
+	if strings.Contains(help, "items list") || !strings.Contains(help, "items fix") {
+		t.Errorf("a default with siblings stays hidden:\n%s", help)
+	}
+	for _, args := range [][]string{{"--json", "account"}, {"--json", "account", "show"}, {"--json", "account", "list"}} {
+		if code, out, stderr := run(t, r, args...); code != 0 || !strings.Contains(out, `"limit": 20`) {
+			t.Errorf("%v: exit %d %s %s", args, code, out, stderr)
+		}
+	}
+}
+
 func TestErrorResultIsPrintedWithTheError(t *testing.T) {
 	r := defaults()
 	code, out, stderr := run(t, r, "items", "fix", "--apply")

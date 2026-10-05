@@ -15,6 +15,7 @@ func TestConformance(t *testing.T) {
 		Options: Options(),
 		Cases: map[string]toolkittest.Case{
 			"notes.list":  {Input: map[string]any{"limit": 2, "tag": "work"}, Args: []string{"notes", "list", "--limit", "2", "--tag", "work"}},
+			"notes.sync":  {Input: map[string]any{}, Args: []string{"notes", "sync"}},
 			"note.get":    {Input: map[string]any{"id": "n2"}, Args: []string{"note", "n2", "show"}},
 			"note.create": {Input: map[string]any{"title": "Draft", "tags": []string{"a", "b"}}, Args: []string{"notes", "create", "Draft", "--tags", "a,b"}},
 			"note.rename": {Input: map[string]any{"id": "n1", "title": "Shopping"}, Args: []string{"note", "n1", "rename", "Shopping"}},

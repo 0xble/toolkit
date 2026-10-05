@@ -12,6 +12,7 @@ package cli
 import (
 	"bufio"
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -131,10 +132,18 @@ func Run(ctx context.Context, reg *op.Registry, opts Options, args []string) (co
 }
 
 // Validate builds the command tree without running it, so a tool's tests
-// catch a declaration kong rejects, such as a duplicate flag.
+// catch a declaration kong rejects, such as a duplicate flag. It also
+// rejects a command flag that kong accepts but would never deliver: one that
+// reuses the name, an alias or the short form of a root flag (--json, --agent,
+// --fields, --yes, --version, --help or one of the tool's Globals), and an
+// operation flag named --apply or --dry-run. Run does not repeat this check,
+// so a tool that already ships such a flag keeps running.
 func Validate(reg *op.Registry, opts Options) error {
-	_, _, err := newKong(reg, opts)
-	return err
+	a, k, err := newKong(reg, opts)
+	if err != nil {
+		return err
+	}
+	return a.checkFlags(k)
 }
 
 func newKong(reg *op.Registry, opts Options, extra ...kong.Option) (*app, *kong.Kong, error) {
@@ -211,7 +220,7 @@ func (a *app) print(e *op.Entry, in, out any, opts Options, format output.Format
 	v := out
 	if strings.TrimSpace(a.root.Fields) != "" {
 		var err error
-		if v, err = output.FilterFields(v, strings.Split(a.root.Fields, ",")); err != nil {
+		if v, err = filterFields(e, v, strings.Split(a.root.Fields, ",")); err != nil {
 			return op.Errorf(op.KindUsage, "invalid_fields", "%s", err.Error())
 		}
 	}
@@ -220,11 +229,40 @@ func (a *app) print(e *op.Entry, in, out any, opts Options, format output.Format
 
 func writeErr(w io.Writer, format output.Format, err error) int {
 	var ce *output.CLIError
-	if !errors.As(err, &ce) {
-		ce = op.AsError(err, op.KindError).CLIError()
+	if errors.As(err, &ce) {
+		output.WriteError(w, format, ce)
+		return ce.ExitCode
 	}
-	output.WriteError(w, format, ce)
+	oe := op.AsError(err, op.KindError)
+	ce = oe.CLIError()
+	if format != output.FormatJSON || !hasDetails(oe) {
+		output.WriteError(w, format, ce)
+		return ce.ExitCode
+	}
+	d := detailedError{CLIError: ce, HTTPStatus: oe.HTTPStatus, RetryAfterSeconds: oe.RetryAfterSeconds, RequestID: oe.RequestID}
+	if oe.Retryable != nil || ce.Retryable {
+		d.Retryable = &ce.Retryable
+	}
+	_ = json.NewEncoder(w).Encode(struct {
+		Error detailedError `json:"error"`
+	}{d})
 	return ce.ExitCode
+}
+
+// detailedError is the JSON envelope of an op.Error with provider details:
+// output.CLIError's fields in their order, then the details, each only when
+// set. Its retryable replaces the embedded one so that an explicit false
+// override is printed too.
+type detailedError struct {
+	*output.CLIError
+	Retryable         *bool  `json:"retryable,omitempty"`
+	HTTPStatus        int    `json:"http_status,omitempty"`
+	RetryAfterSeconds int    `json:"retry_after_seconds,omitempty"`
+	RequestID         string `json:"request_id,omitempty"`
+}
+
+func hasDetails(e *op.Error) bool {
+	return e.Retryable != nil || e.HTTPStatus != 0 || e.RetryAfterSeconds != 0 || e.RequestID != ""
 }
 
 func wantsJSON(args []string) bool {

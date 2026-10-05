@@ -6,7 +6,8 @@
 // and its annotations follow the effect. Every call goes through the same
 // op.Entry.CallJSON path as HTTP, so validation, the apply and confirm rules
 // and authorization are identical. A failed call is an isError result whose
-// text is {"error": {code, message, suggestions}}.
+// text is {"error": {code, message, suggestions}}, plus the provider details
+// of op.Error that are set.
 package mcp
 
 import (

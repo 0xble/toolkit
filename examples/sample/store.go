@@ -1,6 +1,8 @@
 package main
 
 import (
+	"fmt"
+	"net/http"
 	"slices"
 	"strconv"
 	"sync"
@@ -115,4 +117,23 @@ func (s *Store) find(id string) int {
 func notFound(id string) error {
 	return &op.Error{Kind: op.KindNotFound, Code: "note_not_found", Message: "no note " + id,
 		Suggestions: []string{"run: sample notes list"}}
+}
+
+// upstreamError is how the sample reports a failed response from its fake
+// upstream service. A real tool fills the details from the provider's
+// response after sanitizing them.
+func upstreamError(status int) error {
+	const requestID = "req_sample"
+	switch {
+	case status == http.StatusTooManyRequests:
+		return &op.Error{Kind: op.KindRate, Code: "rate_limited", Message: "upstream rate limit reached; retry after 30s",
+			HTTPStatus: status, RetryAfterSeconds: 30, RequestID: requestID}
+	case status >= 500:
+		retryable := true
+		return &op.Error{Kind: op.KindError, Code: "provider_unavailable", Message: fmt.Sprintf("upstream answered %d", status),
+			Retryable: &retryable, HTTPStatus: status, RequestID: requestID}
+	default:
+		return &op.Error{Kind: op.KindError, Code: "provider_error", Message: fmt.Sprintf("upstream answered %d", status),
+			HTTPStatus: status, RequestID: requestID}
+	}
 }

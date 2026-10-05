@@ -49,6 +49,13 @@ func fixture(broken string) toolkittest.Fixture {
 				}})
 		}
 	}
+	if broken == "reserved_flag" {
+		type versioned struct {
+			Version string `json:"version" help:"Swallowed by the root --version"`
+		}
+		op.Add(r, op.Op[versioned, out]{Name: "count.at", Effect: op.Read,
+			Handler: func(context.Context, op.Request, versioned) (out, error) { return out{}, nil }})
+	}
 	state := func() any { return count }
 	if broken == "constant_state" {
 		state = func() any { return 0 }
@@ -92,6 +99,7 @@ func TestBrokenFixturesFail(t *testing.T) {
 		"missing_case":    "count.destructive is destructive and has no conformance case",
 		"parity":          "HTTP output vs CLI output differ",
 		"immediate_noop":  "CLI without --apply (CLIImmediate) did not change the state",
+		"reserved_flag":   "operation count.at: flag --version collides with the toolkit's root flag --version",
 	} {
 		t.Run(broken, func(t *testing.T) {
 			cmd := exec.Command(os.Args[0], "-test.run=^TestBrokenFixturesFail$", "-test.count=1")
