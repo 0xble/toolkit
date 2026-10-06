@@ -49,6 +49,15 @@ func fixture(broken string) toolkittest.Fixture {
 				}})
 		}
 	}
+	// CLIConfirmed: the CLI applies without --yes, HTTP and MCP still need
+	// confirm.
+	op.Add(r, op.Op[in, out]{Name: "count.send", Effect: op.Destructive, MCP: true, CLIImmediate: true, CLIConfirmed: true,
+		Handler: func(_ context.Context, req op.Request, _ in) (out, error) {
+			if req.Apply && broken != "confirmed_noop" {
+				count++
+			}
+			return out{Applied: req.Apply}, nil
+		}})
 	if broken == "reserved_flag" {
 		type versioned struct {
 			Version string `json:"version" help:"Swallowed by the root --version"`
@@ -71,6 +80,8 @@ func suite(broken string) toolkittest.Suite {
 		// CLIImmediate: the kit adds --dry-run to preview and nothing to apply.
 		"count.write_now":       {Input: map[string]any{"id": "a"}, Args: []string{"count", "write-now", "--id", "a"}},
 		"count.destructive_now": {Input: map[string]any{"id": "a"}, Args: []string{"count", "destructive-now", "--id", "a"}},
+		// CLIConfirmed: the kit adds no --yes to apply.
+		"count.send": {Input: map[string]any{"id": "a"}, Args: []string{"count", "send", "--id", "a"}},
 	}
 	if broken == "missing_case" {
 		delete(cases, "count.destructive")
@@ -99,6 +110,7 @@ func TestBrokenFixturesFail(t *testing.T) {
 		"missing_case":    "count.destructive is destructive and has no conformance case",
 		"parity":          "HTTP output vs CLI output differ",
 		"immediate_noop":  "CLI without --apply (CLIImmediate) did not change the state",
+		"confirmed_noop":  "CLI without --apply or --yes (CLIConfirmed) did not change the state",
 		"reserved_flag":   "operation count.at: flag --version collides with the toolkit's root flag --version",
 	} {
 		t.Run(broken, func(t *testing.T) {

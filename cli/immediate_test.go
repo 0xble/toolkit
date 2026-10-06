@@ -121,3 +121,53 @@ func TestRenderWithInputSeesTheCall(t *testing.T) {
 		t.Errorf("--json skips the hook: %q", out)
 	}
 }
+
+// confirmed registers a destructive operation with CLIConfirmed. It records
+// the confirm the handler saw on each apply.
+func confirmed(confirms *[]bool) *op.Registry {
+	r := op.New("t", "v1")
+	op.Add(r, op.Op[itemIn, result]{Name: "item.send", CLI: "item <id> send", Effect: op.Destructive, CLIImmediate: true, CLIConfirmed: true,
+		Handler: func(_ context.Context, req op.Request, in itemIn) (result, error) {
+			if req.Apply {
+				*confirms = append(*confirms, req.Confirm)
+			}
+			return result{In: in, Applied: req.Apply}, nil
+		},
+	})
+	return r
+}
+
+func TestCLIConfirmedAppliesWithoutYes(t *testing.T) {
+	var confirms []bool
+	r := confirmed(&confirms)
+	// stdin is not a terminal, so nothing prompts.
+	for _, args := range [][]string{
+		{"--agent", "item", "a", "send", "x"},
+		{"--agent", "item", "a", "send", "x", "--apply"},
+		{"--agent", "-y", "item", "a", "send", "x"},
+		{"item", "a", "send", "x"},
+	} {
+		if code, out, stderr := run(t, r, args...); code != 0 || !strings.Contains(out, `"applied": true`) {
+			t.Errorf("%v applies: exit %d %s %s", args, code, out, stderr)
+		}
+	}
+	if code, out, _ := run(t, r, "--agent", "item", "a", "send", "x", "--dry-run"); code != 0 || !strings.Contains(out, `"applied": false`) {
+		t.Errorf("--dry-run previews: exit %d %s", code, out)
+	}
+	if fmt.Sprint(confirms) != "[true true true true]" {
+		t.Errorf("the handler saw confirm %v on its applies, want 4 times true", confirms)
+	}
+}
+
+func TestCLIConfirmedHelp(t *testing.T) {
+	var confirms []bool
+	var n int
+	_, out, _ := run(t, confirmed(&confirms), "item", "a", "send", "--help")
+	if !strings.Contains(out, "--dry-run") || strings.Contains(out, "applying needs --yes") {
+		t.Errorf("a CLIConfirmed command does not claim it needs --yes:\n%s", out)
+	}
+	_, out, _ = run(t, immediate(&n), "item", "a", "destructive", "--help")
+	if !strings.Contains(out, "applying needs --yes") {
+		t.Errorf("a plain immediate destructive command still says it needs --yes:\n%s", out)
+	}
+}

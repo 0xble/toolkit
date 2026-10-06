@@ -166,6 +166,28 @@ func TestCLIImmediateStillNeedsApply(t *testing.T) {
 	}
 }
 
+func TestCLIConfirmedStillNeedsConfirm(t *testing.T) {
+	r := op.New("t", "v")
+	op.Add(r, op.Op[in, out]{Name: "thing.make", Effect: op.Destructive, CLIImmediate: true, CLIConfirmed: true, Handler: func(_ context.Context, req op.Request, _ in) (out, error) {
+		return out{Applied: req.Apply}, nil
+	}})
+	h := api.Handler(r, api.Options{Authorizer: op.AllowAll})
+	for _, body := range []string{`{"name":"x","apply":true}`, `{"name":"x","apply":true,"confirm":false}`} {
+		if code, resp := call(t, h, body); code != http.StatusBadRequest || !strings.Contains(resp, `"confirmation_required"`) {
+			t.Errorf("%s: %d %s; want 400 and confirmation_required", body, code, resp)
+		}
+	}
+	if code, body := call(t, h, `{"name":"x","apply":true,"confirm":true}`); code != 200 || strings.TrimSpace(body) != `{"applied":true}` {
+		t.Errorf("apply and confirm apply: %d %s", code, body)
+	}
+	w := httptest.NewRecorder()
+	h.ServeHTTP(w, httptest.NewRequest(http.MethodGet, "/openapi.json", nil))
+	toolkittest.CheckOpenAPI(t, r, w.Body.Bytes())
+	if n := strings.Count(w.Body.String(), `"x-cli-confirmed":true`); n != 1 {
+		t.Errorf("x-cli-confirmed appears %d times, want once: %s", n, w.Body)
+	}
+}
+
 type exportIn struct {
 	Name string `json:"name,omitempty"`
 	Out  string `json:"out,omitempty" toolkit:"cli-only"`

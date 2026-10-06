@@ -3,6 +3,7 @@ package mcp_test
 import (
 	"context"
 	"encoding/json"
+	"strings"
 	"testing"
 
 	"github.com/google/jsonschema-go/jsonschema"
@@ -159,6 +160,39 @@ func TestCLIImmediateIsToolMeta(t *testing.T) {
 	res, err := cs.CallTool(context.Background(), &sdk.CallToolParams{Name: "obj_set_now", Arguments: map[string]any{}})
 	if err != nil || res.IsError || res.Content[0].(*sdk.TextContent).Text != `{"n":0}` {
 		t.Errorf("without apply the tool previews: %+v %v", res, err)
+	}
+}
+
+func TestCLIConfirmedIsToolMetaAndStillNeedsConfirm(t *testing.T) {
+	r := op.New("t", "v")
+	set := func(_ context.Context, req op.Request, _ empty) (obj, error) {
+		if req.Apply {
+			return obj{N: 1}, nil
+		}
+		return obj{}, nil
+	}
+	op.Add(r, op.Op[empty, obj]{Name: "obj.wipe_now", CLI: "obj wipe-now", Effect: op.Destructive, MCP: true, CLIImmediate: true, Handler: set})
+	op.Add(r, op.Op[empty, obj]{Name: "obj.wipe", Effect: op.Destructive, MCP: true, CLIImmediate: true, CLIConfirmed: true, Handler: set})
+	cs := toolkittest.MCPClient(t, r, op.AllowAll)
+	tools, err := cs.ListTools(context.Background(), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	toolkittest.CheckMCPTools(t, r, tools.Tools)
+	for _, tool := range tools.Tools {
+		if _, ok := tool.Meta[mcp.MetaCLIConfirmed]; ok != (tool.Name == "obj_wipe") || tool.Meta[mcp.MetaCLIImmediate] != true {
+			t.Errorf("%s: _meta %v", tool.Name, tool.Meta)
+		}
+	}
+	for _, args := range []map[string]any{{"apply": true}, {"apply": true, "confirm": false}} {
+		res, err := cs.CallTool(context.Background(), &sdk.CallToolParams{Name: "obj_wipe", Arguments: args})
+		if err != nil || !res.IsError || !strings.Contains(res.Content[0].(*sdk.TextContent).Text, `"confirmation_required"`) {
+			t.Errorf("%v: %+v %v; want isError and confirmation_required", args, res, err)
+		}
+	}
+	res, err := cs.CallTool(context.Background(), &sdk.CallToolParams{Name: "obj_wipe", Arguments: map[string]any{"apply": true, "confirm": true}})
+	if err != nil || res.IsError || res.Content[0].(*sdk.TextContent).Text != `{"n":1}` {
+		t.Errorf("apply and confirm apply: %+v %v", res, err)
 	}
 }
 

@@ -178,7 +178,8 @@ func (a *app) runOp(ctx context.Context, kctx *kong.Context, l *leaf, opts Optio
 	if err != nil {
 		return writeErr(opts.Stderr, format, err)
 	}
-	req := op.Request{Surface: op.SurfaceCLI, Confirm: a.root.Yes}
+	// A CLIConfirmed operation takes the command line as its confirmation.
+	req := op.Request{Surface: op.SurfaceCLI, Confirm: a.root.Yes || e.CLIConfirmed}
 	if l.dryRun.IsValid() {
 		req.Apply = !l.dryRun.Bool()
 	} else if l.apply.IsValid() {

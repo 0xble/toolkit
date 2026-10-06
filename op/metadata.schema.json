@@ -17,6 +17,7 @@
         "additionalProperties": false,
         "if": {"required": ["cli_immediate"]},
         "then": {"properties": {"effect": {"enum": ["write", "destructive"]}}},
+        "dependentSchemas": {"cli_confirmed": {"required": ["cli_immediate"], "properties": {"effect": {"const": "destructive"}}}},
         "properties": {
           "name": {"type": "string", "pattern": "^[a-z][a-z0-9_]*(\\.[a-z][a-z0-9_]*)*$"},
           "cli": {"type": "string", "minLength": 1},
@@ -26,6 +27,7 @@
           "mcp": {"type": "boolean"},
           "mcp_name": {"type": "string", "pattern": "^[a-z][a-z0-9_]*$"},
           "cli_immediate": {"const": true, "description": "The CLI applies without --apply and previews with --dry-run. HTTP and MCP still need apply."},
+          "cli_confirmed": {"const": true, "description": "The CLI applies this destructive operation without --yes or a prompt: the command line is the confirmation. Requires cli_immediate. HTTP and MCP still need apply and confirm."},
           "cli_only_inputs": {"type": "array", "minItems": 1, "items": {"type": "string", "minLength": 1}, "description": "Input fields accepted only on the command line, such as local file paths. input omits them and HTTP and MCP refuse them with cli_only."},
           "input": {"type": "object"},
           "output": {"type": "object"}

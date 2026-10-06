@@ -106,9 +106,14 @@ type Op[In, Out any] struct {
 	// without --apply, for clearly scoped mutations such as "player pause".
 	// The CLI gains --dry-run to preview instead and still accepts --apply as
 	// a no-op. A destructive operation still needs --yes or a confirmed
-	// prompt. HTTP and MCP are unchanged: they apply only with "apply": true,
+	// prompt, unless it sets CLIConfirmed. HTTP and MCP are unchanged: they apply only with "apply": true,
 	// and the served default authorizer still refuses applied writes.
 	CLIImmediate bool
+	// CLIConfirmed makes the command line itself the confirmation for a
+	// destructive operation: with CLIImmediate it applies on the CLI with no
+	// --yes or prompt. HTTP and MCP still need "apply": true and "confirm": true.
+	// Needs Effect Destructive and CLIImmediate.
+	CLIConfirmed bool
 	// Paged declares that the output is a page: an object whose items array
 	// holds the results, next to envelope keys such as next_cursor and
 	// has_more. The CLI's --fields then keeps the named keys of each item and
@@ -145,6 +150,8 @@ type Entry struct {
 	Aliases []string
 	// CLIImmediate is Op.CLIImmediate.
 	CLIImmediate bool
+	// CLIConfirmed is Op.CLIConfirmed.
+	CLIConfirmed bool
 	// Paged is Op.Paged.
 	Paged bool
 	// CLIOnlyInputs are the json names of the input fields tagged
@@ -219,11 +226,14 @@ func newEntry[In, Out any](r *Registry, o Op[In, Out]) (*Entry, error) {
 	if o.CLIImmediate && !o.Effect.Mutates() {
 		return nil, fmt.Errorf("CLIImmediate needs a write or destructive effect")
 	}
+	if o.CLIConfirmed && (o.Effect != Destructive || !o.CLIImmediate) {
+		return nil, fmt.Errorf("CLIConfirmed needs a destructive effect and CLIImmediate")
+	}
 	if o.Render != nil && o.RenderWithInput != nil {
 		return nil, fmt.Errorf("set at most one of Render and RenderWithInput")
 	}
 	e := &Entry{Name: o.Name, Summary: o.Summary, Effect: o.Effect, MCP: o.MCP, DefaultCommand: o.DefaultCommand,
-		Aliases: slices.Clone(o.Aliases), CLIImmediate: o.CLIImmediate, Paged: o.Paged, In: reflect.TypeFor[In](), Out: reflect.TypeFor[Out]()}
+		Aliases: slices.Clone(o.Aliases), CLIImmediate: o.CLIImmediate, CLIConfirmed: o.CLIConfirmed, Paged: o.Paged, In: reflect.TypeFor[In](), Out: reflect.TypeFor[Out]()}
 	if e.In.Kind() != reflect.Struct {
 		return nil, fmt.Errorf("input must be a struct, got %s", e.In)
 	}

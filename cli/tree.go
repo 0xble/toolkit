@@ -368,7 +368,8 @@ func (a *app) buildType(n *node, bound map[string]bool) (reflect.Type, error) {
 // applyFlags are the generated --apply and --dry-run flags of a write or
 // destructive operation. By default --apply performs the change. With
 // CLIImmediate the command applies on its own, --dry-run previews, and
-// --apply is a hidden no-op kept for callers that already pass it.
+// --apply is a hidden no-op kept for callers that already pass it. With
+// CLIConfirmed a destructive command also applies without --yes.
 func applyFlags(e *op.Entry) []reflect.StructField {
 	if !e.Effect.Mutates() {
 		return nil
@@ -386,7 +387,7 @@ func applyFlags(e *op.Entry) []reflect.StructField {
 		return []reflect.StructField{flag(applyField, "apply", help, "")}
 	}
 	help := "Preview the change without applying it."
-	if destructive {
+	if destructive && !e.CLIConfirmed {
 		help += " Destructive: applying needs --yes or a confirmed prompt."
 	}
 	const xor = ` xor:"toolkit-apply"`
