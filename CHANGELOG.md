@@ -5,6 +5,14 @@ Released versions are described in their
 
 ## Unreleased
 
+- `op.Op.CLIConfirmed` makes the command line the confirmation of a
+  destructive `CLIImmediate` operation: the CLI applies it without `--yes`
+  or a prompt, and `--dry-run` still previews. HTTP and MCP still need
+  `"apply": true` and `"confirm": true`. `Add` rejects it unless the effect
+  is destructive and `CLIImmediate` is set. It shows as `cli_confirmed` in
+  the metadata, `x-cli-confirmed` in OpenAPI and `toolkit/cli_confirmed`
+  (`mcp.MetaCLIConfirmed`) in the MCP tool `_meta`, and the conformance kit
+  checks that the CLI applies without `--yes`.
 - `op.Request.Meta` carries a copy of an MCP tool call's request `_meta` on
   stdio and HTTP MCP, nil when absent and always nil on the CLI and the HTTP
   API. It is never read from the arguments.

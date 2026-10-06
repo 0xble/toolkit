@@ -50,6 +50,15 @@ field is declared once.
   refuses applied writes. The flag shows as `cli_immediate` in the metadata,
   `x-cli-immediate` in OpenAPI and the `toolkit/cli_immediate` key of the MCP
   tool's `_meta`. Without it nothing changes.
+- **Command line as confirmation.** `CLIConfirmed: true` on a destructive
+  operation with `CLIImmediate` makes the CLI apply it without `--yes` or a
+  prompt: typing the command is the confirmation, as for `message send`,
+  which cannot be undone but whose callers never pass `--yes`. `--dry-run`
+  still previews. HTTP and MCP are unchanged: they apply only with
+  `"apply": true` and `"confirm": true`. `Add` rejects it on any other
+  operation. The flag shows as `cli_confirmed` in the metadata,
+  `x-cli-confirmed` in OpenAPI and the `toolkit/cli_confirmed` key of the MCP
+  tool's `_meta`.
 - **CLI-only inputs.** An input field tagged `toolkit:"cli-only"`, as in
   ``Out string `json:"out,omitempty" toolkit:"cli-only"` ``, is accepted only
   on the command line. Use it for a flag or argument that names a local file
@@ -265,7 +274,9 @@ without `confirm` on every surface, and that writes change nothing without
 `apply`. For an operation with `CLIImmediate` it previews the CLI with
 `--dry-run`, checks that the CLI applies without `--apply` while HTTP and MCP
 still preview without `apply`, and checks that the OpenAPI and MCP documents
-carry the flag. Case `Args` never include `--apply` or `--dry-run`. HTTP and
+carry the flag. For an operation with `CLIConfirmed` it checks that the CLI
+applies without `--yes` while HTTP and MCP still refuse without `confirm`.
+Case `Args` never include `--apply`, `--dry-run` or `--yes`. HTTP and
 MCP calls leave out a case's cli-only inputs, and when a case sets one, the
 kit checks that HTTP and MCP refuse it with `cli_only` and change nothing,
 even applied, while the CLI accepts it.

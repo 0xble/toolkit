@@ -21,7 +21,9 @@
 // without confirm on the CLI, HTTP and MCP, and that writes only preview
 // without apply. An operation with CLIImmediate is checked to apply on the
 // CLI without --apply and preview with --dry-run, while HTTP and MCP still
-// preview without apply. HTTP and MCP calls leave out a case's cli-only
+// preview without apply. An operation with CLIConfirmed is checked to apply
+// on the CLI without --yes, while HTTP and MCP still refuse to apply it
+// without confirm. HTTP and MCP calls leave out a case's cli-only
 // inputs, and when a case sets one, the kit checks that HTTP and MCP refuse
 // it with cli_only and change nothing while the CLI accepts it. All calls
 // are in-process, with no network or credentials.
@@ -202,7 +204,9 @@ func (s Suite) checkCase(t *testing.T, name string, c Case) {
 	if e.CLIImmediate {
 		what = "CLI without --apply (CLIImmediate)"
 	}
-	if e.Effect == op.Destructive {
+	if e.CLIConfirmed {
+		what = "CLI without --apply or --yes (CLIConfirmed)"
+	} else if e.Effect == op.Destructive {
 		args = append(args, "--yes")
 	}
 	if code, _, stderr := s.cli(t, fx.Registry, args...); code != 0 {
@@ -222,12 +226,15 @@ func applyArgs(e *op.Entry, c Case) []string {
 }
 
 // checkConfirm checks that a destructive apply without confirm is refused,
-// with the same error, on every surface.
+// with the same error, on every surface. The CLI of an operation with
+// CLIConfirmed is the confirmation, so only HTTP and MCP are checked.
 func (s Suite) checkConfirm(t *testing.T, fx Fixture, e *op.Entry, c Case, before []byte) {
-	args := applyArgs(e, c)
-	code, _, stderr := s.cli(t, fx.Registry, args...)
-	if code != op.KindUsage.ExitCode() || errCode(stderr) != "confirmation_required" {
-		t.Errorf("CLI %v without --yes: exit %d, %s; want exit 2 and confirmation_required", args, code, stderr)
+	if !e.CLIConfirmed {
+		args := applyArgs(e, c)
+		code, _, stderr := s.cli(t, fx.Registry, args...)
+		if code != op.KindUsage.ExitCode() || errCode(stderr) != "confirmation_required" {
+			t.Errorf("CLI %v without --yes: exit %d, %s; want exit 2 and confirmation_required", args, code, stderr)
+		}
 	}
 	for _, extra := range []map[string]any{{"apply": true}, {"apply": true, "confirm": false}} {
 		status, body := httpCall(t, fx.Registry, op.AllowAll, http.MethodPost, "/ops/"+e.Name, remoteInput(e, c, extra))
@@ -333,8 +340,8 @@ func CheckMetadata(t testing.TB, doc []byte) {
 }
 
 // CheckOpenAPI checks that an OpenAPI document has exactly one POST path
-// per operation, with the registry's input and output schemas, effect and
-// CLIImmediate.
+// per operation, with the registry's input and output schemas, effect,
+// CLIImmediate and CLIConfirmed.
 func CheckOpenAPI(t testing.TB, reg *op.Registry, doc []byte) {
 	t.Helper()
 	var d struct {
@@ -344,6 +351,7 @@ func CheckOpenAPI(t testing.TB, reg *op.Registry, doc []byte) {
 				OperationID  string          `json:"operationId"`
 				Effect       op.Effect       `json:"x-effect"`
 				CLIImmediate bool            `json:"x-cli-immediate"`
+				CLIConfirmed bool            `json:"x-cli-confirmed"`
 				RequestBody  json.RawMessage `json:"requestBody"`
 				Responses    json.RawMessage `json:"responses"`
 			} `json:"post"`
@@ -367,9 +375,9 @@ func CheckOpenAPI(t testing.TB, reg *op.Registry, doc []byte) {
 			continue
 		}
 		p := item.Post
-		if p.OperationID != e.MCPName() || p.Effect != e.Effect || p.CLIImmediate != e.CLIImmediate {
-			t.Errorf("%s: operationId %q effect %q x-cli-immediate %v, want %q %q %v", path,
-				p.OperationID, p.Effect, p.CLIImmediate, e.MCPName(), e.Effect, e.CLIImmediate)
+		if p.OperationID != e.MCPName() || p.Effect != e.Effect || p.CLIImmediate != e.CLIImmediate || p.CLIConfirmed != e.CLIConfirmed {
+			t.Errorf("%s: operationId %q effect %q x-cli-immediate %v x-cli-confirmed %v, want %q %q %v %v", path,
+				p.OperationID, p.Effect, p.CLIImmediate, p.CLIConfirmed, e.MCPName(), e.Effect, e.CLIImmediate, e.CLIConfirmed)
 		}
 		var body struct {
 			Content map[string]struct {
@@ -393,7 +401,7 @@ func CheckOpenAPI(t testing.TB, reg *op.Registry, doc []byte) {
 
 // CheckMCPTools checks that tools, from any MCP transport, are exactly the
 // registry's MCP operations, with the registry's input schemas, effect
-// annotations and CLIImmediate _meta.
+// annotations and CLIImmediate and CLIConfirmed _meta.
 func CheckMCPTools(t testing.TB, reg *op.Registry, tools []*sdk.Tool) {
 	t.Helper()
 	got := map[string]*sdk.Tool{}
@@ -421,6 +429,9 @@ func CheckMCPTools(t testing.TB, reg *op.Registry, tools []*sdk.Tool) {
 		}
 		if now, _ := tool.Meta[mcp.MetaCLIImmediate].(bool); now != e.CLIImmediate {
 			t.Errorf("%s: _meta %s is %v, want %v", e.Name, mcp.MetaCLIImmediate, now, e.CLIImmediate)
+		}
+		if confirmed, _ := tool.Meta[mcp.MetaCLIConfirmed].(bool); confirmed != e.CLIConfirmed {
+			t.Errorf("%s: _meta %s is %v, want %v", e.Name, mcp.MetaCLIConfirmed, confirmed, e.CLIConfirmed)
 		}
 	}
 	if len(tools) != want {

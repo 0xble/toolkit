@@ -58,6 +58,11 @@ func NewServer(reg *op.Registry, auth op.Authorizer, httpReq *http.Request) *sdk
 // CLIImmediate. It is informational: the MCP tool still needs apply.
 const MetaCLIImmediate = "toolkit/cli_immediate"
 
+// MetaCLIConfirmed is the tool _meta key set to true for an operation with
+// CLIConfirmed. It is informational: the MCP tool still needs apply and
+// confirm.
+const MetaCLIConfirmed = "toolkit/cli_confirmed"
+
 // Tool is the MCP tool definition of e. The output schema is set only when
 // the output is always a JSON object, as MCP requires. Any other output,
 // including an op.Op whose Out is any or json.RawMessage, has no output
@@ -78,6 +83,9 @@ func Tool(e *op.Entry) *sdk.Tool {
 	}
 	if e.CLIImmediate {
 		t.Meta = sdk.Meta{MetaCLIImmediate: true}
+	}
+	if e.CLIConfirmed {
+		t.Meta[MetaCLIConfirmed] = true // CLIConfirmed implies CLIImmediate
 	}
 	return t
 }
