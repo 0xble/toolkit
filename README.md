@@ -317,7 +317,11 @@ requires.
 | `runner` | `vars.CI_RUNNER`, then `ubuntu-24.04` | Gate runner. The nightly uses `vars.CI_NIGHTLY_RUNNER` |
 | `ci-image-dir` | empty | Directory with the Dockerfile of an execution image, for example `ci` |
 | `golangci-lint-version` | `v2.13.2` | Installed when no image is used |
-| `govulncheck-version` | `v1.8.0` | Nightly only, installed when no image is used |
+| `govulncheck-version` | `v1.7.0` | Nightly only, pinned for Go 1.25.x when no image is used; checked against the selected Go toolchain |
+
+`ci/govulncheck-version` is the single image pin; the toolkit gate checks that
+it matches the reusable workflow default and that the release is compatible
+with the module's declared Go version.
 
 Without `ci-image-dir`, `bin/ci` runs on the runner after `actions/setup-go`.
 With it, `bin/ci` runs inside an image built from that directory. A pull
