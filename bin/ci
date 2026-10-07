@@ -87,6 +87,11 @@ lane_test_short() {
   go test -short -count=1 ./...
 }
 
+lane_tool_pins() {
+  log "lane tool pins"
+  bash ci/check-govulncheck-pin.sh
+}
+
 lane_lint() {
   log "lane lint"
   golangci-lint run ./...
@@ -114,6 +119,7 @@ case "$profile" in
     lane_mod
     lane_vet
     lane_templates
+    lane_tool_pins
     if command -v golangci-lint >/dev/null; then
       lane_lint
     else
@@ -127,6 +133,7 @@ case "$profile" in
     lane_mod
     lane_vet
     lane_templates
+    lane_tool_pins
     lane_lint
     lane_test
     assert_candidate
@@ -138,6 +145,7 @@ case "$profile" in
     lane_mod
     lane_vet
     lane_templates
+    lane_tool_pins
     lane_lint
     lane_test
     lane_soak

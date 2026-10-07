@@ -31,9 +31,12 @@ on:
         type: string
         default: v2.13.2
       govulncheck-version:
-        description: govulncheck release installed when no CI image is used.
+        description: >-
+          govulncheck release installed when no image is used. The pinned
+          default remains compatible with Go 1.25.x; the check below rejects
+          an override that requires a newer Go toolchain.
         type: string
-        default: v1.8.0
+        default: v1.7.0
 
 permissions:
   contents: read
@@ -87,6 +90,33 @@ jobs:
           go-version-file: ${{ inputs.go-version-file }}
           cache: false
 
+      - name: Check govulncheck Go compatibility
+        if: ${{ inputs.ci-image-dir == '' }}
+        env:
+          VULN_VERSION: ${{ inputs.govulncheck-version }}
+        run: |
+          set -euo pipefail
+          required_go="$(GOWORK=off GOTOOLCHAIN=local go list -m -f '{{.GoVersion}}' "golang.org/x/vuln@$VULN_VERSION")"
+          runner_go="$(GOWORK=off GOTOOLCHAIN=local go env GOVERSION | sed 's/^go//')"
+          version_at_least() {
+            awk -v have="$1" -v need="$2" '
+              BEGIN {
+                split(have, h, ".")
+                split(need, n, ".")
+                for (i = 1; i <= 3; i++) {
+                  if ((h[i] + 0) > (n[i] + 0)) exit 0
+                  if ((h[i] + 0) < (n[i] + 0)) exit 1
+                }
+                exit 0
+              }'
+          }
+          if ! version_at_least "$runner_go" "$required_go"; then
+            echo "govulncheck $VULN_VERSION requires Go $required_go, but the selected toolchain is Go $runner_go" >&2
+            exit 1
+          fi
+          printf 'govulncheck %s requires Go %s; selected toolchain is Go %s\n' \
+            "$VULN_VERSION" "$required_go" "$runner_go"
+
       - if: ${{ inputs.ci-image-dir == '' }}
         uses: golangci/golangci-lint-action@ba0d7d2ec06a0ea1cb5fa41b2e4a3ab91d21278a # v9.3.0
         with:
@@ -101,7 +131,8 @@ jobs:
         run: |
           set -euo pipefail
           bin="$RUNNER_TEMP/tool-bin"
-          GOBIN="$bin" GOFLAGS='' go install "golang.org/x/vuln/cmd/govulncheck@$VULN_VERSION"
+          GOBIN="$bin" GOWORK=off GOTOOLCHAIN=local GOFLAGS='' \
+            go install "golang.org/x/vuln/cmd/govulncheck@$VULN_VERSION"
           echo "$bin" >>"$GITHUB_PATH"
 
       - name: Run ./bin/ci nightly on the exact SHA
