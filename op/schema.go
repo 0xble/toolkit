@@ -43,35 +43,80 @@ func schemaFor(t reflect.Type) (*jsonschema.Schema, error) {
 }
 
 func annotate(s *jsonschema.Schema, t reflect.Type) error {
+	if s == nil {
+		return nil
+	}
 	for t.Kind() == reflect.Pointer {
 		t = t.Elem()
 	}
-	if t.Kind() != reflect.Struct || s == nil {
-		return nil
-	}
-	for name, f := range jsonFields(t) {
-		p, ok := s.Properties[name]
-		if !ok {
-			continue
-		}
-		if p.Description == "" {
-			p.Description = f.Tag.Get("help")
-		}
-		if hasJSONOption(f.Tag.Get("json"), "string") {
-			p.Type = "string"
-			p.Types = nil
-		}
-		if def, ok := f.Tag.Lookup("default"); ok {
-			v, err := parseDefault(f.Type, def)
-			if err != nil {
-				return fmt.Errorf("field %s: %w", f.Name, err)
+	switch t.Kind() {
+	case reflect.Struct:
+		for name, f := range jsonFields(t) {
+			p, ok := s.Properties[name]
+			if !ok {
+				continue
 			}
-			b, _ := json.Marshal(v.Interface())
-			p.Default = b
-			s.Required = slices.DeleteFunc(s.Required, func(r string) bool { return r == name })
+			if err := annotate(p, f.Type); err != nil {
+				return err
+			}
+			if p.Description == "" {
+				p.Description = f.Tag.Get("help")
+			}
+			stringTag := hasJSONOption(f.Tag.Get("json"), "string")
+			if stringTag {
+				p.Type = "string"
+				p.Types = nil
+			}
+			if def, ok := f.Tag.Lookup("default"); ok {
+				v, err := parseDefault(f.Type, def)
+				if err != nil {
+					return fmt.Errorf("field %s: %w", f.Name, err)
+				}
+				b, err := marshalDefault(v, stringTag)
+				if err != nil {
+					return fmt.Errorf("field %s: %w", f.Name, err)
+				}
+				p.Default = b
+				s.Required = slices.DeleteFunc(s.Required, func(r string) bool { return r == name })
+			}
+		}
+	case reflect.Array, reflect.Slice:
+		if s.Items != nil {
+			return annotate(s.Items, t.Elem())
+		}
+		for _, item := range s.ItemsArray {
+			if err := annotate(item, t.Elem()); err != nil {
+				return err
+			}
+		}
+	case reflect.Map:
+		if s.AdditionalProperties != nil {
+			return annotate(s.AdditionalProperties, t.Elem())
 		}
 	}
 	return nil
+}
+
+func marshalDefault(v reflect.Value, stringTag bool) ([]byte, error) {
+	if !stringTag {
+		return json.Marshal(v.Interface())
+	}
+	t := reflect.StructOf([]reflect.StructField{{
+		Name: "Value",
+		Type: v.Type(),
+		Tag:  reflect.StructTag(`json:",string"`),
+	}})
+	h := reflect.New(t).Elem()
+	h.Field(0).Set(v)
+	b, err := json.Marshal(h.Interface())
+	if err != nil {
+		return nil, err
+	}
+	var obj map[string]json.RawMessage
+	if err := json.Unmarshal(b, &obj); err != nil {
+		return nil, err
+	}
+	return obj["Value"], nil
 }
 
 func hasJSONOption(tag, want string) bool {

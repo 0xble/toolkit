@@ -24,6 +24,15 @@ type listIn struct {
 	Tag   string `json:"tag,omitempty"`
 }
 
+type nestedStringIn struct {
+	Nested nestedStringFields `json:"nested"`
+}
+
+type nestedStringFields struct {
+	Count   int  `json:"count,string" default:"5"`
+	Enabled bool `json:"enabled,omitempty,string" default:"true"`
+}
+
 // badPage has an items key that is not an array.
 type badPage struct {
 	Items string `json:"items"`
@@ -135,6 +144,30 @@ func TestDecodeValidatesAndAppliesDefaults(t *testing.T) {
 	}
 	if s := e.InputSchema(); string(s.Properties["limit"].Default) != "20" || len(s.Required) != 0 {
 		t.Errorf("default not in schema: %+v", s)
+	}
+}
+
+func TestSchemaAnnotatesJSONStringDefaultsAndNestedFields(t *testing.T) {
+	var n int
+	r := op.New("t", "v")
+	op.Add(r, op.Op[nestedStringIn, res]{Name: "nested", Effect: op.Read, Handler: handler[nestedStringIn](&n)})
+	e := r.Lookup("nested")
+	s := e.InputSchema()
+	nested := s.Properties["nested"]
+	if nested == nil {
+		t.Fatal("nested property missing")
+	}
+	for name, want := range map[string]string{"count": `"5"`, "enabled": `"true"`} {
+		p := nested.Properties[name]
+		if p == nil || p.Type != "string" || string(p.Default) != want {
+			t.Errorf("nested.%s: schema=%+v, want string default %s", name, p, want)
+		}
+	}
+	if len(nested.Required) != 0 {
+		t.Errorf("nested defaults remain required: %v", nested.Required)
+	}
+	if _, _, _, err := e.Decode(json.RawMessage(`{"nested":{"count":"6"}}`)); err != nil {
+		t.Fatalf("string-tagged nested input should decode: %v", err)
 	}
 }
 
