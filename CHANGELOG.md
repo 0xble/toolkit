@@ -28,4 +28,17 @@ Released versions are described in their
   likewise keeps such integers exact, paged or not. Numbers written with a
   fraction or exponent still decode as before, so `1.0` and `1e3` still fill
   an integer field.
+- Input `default` tags now apply in nested struct fields, not only in
+  embedded ones, on the CLI, HTTP and MCP. A pointer-to-struct section gets
+  its defaults only when the caller sends it. An omitted section stays nil,
+  so a handler can still tell absent from present. A tool whose input nests
+  a struct with `default` tags will now see those defaults where it saw zero
+  values.
+- A `json:",string"` tag now follows encoding/json everywhere. The input
+  schema types such a field as a string, and a `default` on it is written
+  as a JSON string (`"7"`, not `7`). The tag is ignored on slices, maps,
+  structs and pointers to pointers, as encoding/json ignores it. An explicit
+  zero CLI value (`--count 0`, `--enabled=false`, an empty `<id>`) is sent in
+  its quoted form. Each operation under a shared `<id>` path placeholder uses
+  its own field's tag.
 

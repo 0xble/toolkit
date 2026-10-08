@@ -197,11 +197,11 @@ func stringArgs() *op.Registry {
 	r := registry(nil)
 	op.Add(r, op.Op[stringArgIn, argEcho]{Name: "thing.quoted", CLI: "thing <id> quoted", Effect: op.Read,
 		Handler: func(_ context.Context, _ op.Request, in stringArgIn) (argEcho, error) {
-			return argEcho{ID: in.ID}, nil
+			return argEcho(in), nil
 		}})
 	op.Add(r, op.Op[plainArgIn, argEcho]{Name: "thing.plain", CLI: "thing <id> plain", Effect: op.Read,
 		Handler: func(_ context.Context, _ op.Request, in plainArgIn) (argEcho, error) {
-			return argEcho{ID: in.ID}, nil
+			return argEcho(in), nil
 		}})
 	return r
 }

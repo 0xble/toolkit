@@ -310,6 +310,11 @@ func applyDefaults(v reflect.Value) error {
 // prefillSections allocates each pointer-to-struct section the caller sent
 // in obj and fills its defaults before decoding, so a sent section gets the
 // same defaults as a plain nested struct while an omitted one stays nil.
+//
+// It does not reach fields promoted through an embedded nil pointer (an
+// anonymous *Base with no json name). encoding/json still allocates that
+// embed and fills the keys sent, but the embed's own default tags do not
+// apply. The CLI rejects embedded pointers, so only HTTP and MCP see this.
 func prefillSections(v reflect.Value, obj map[string]any) error {
 	for v.Kind() == reflect.Pointer {
 		if v.IsNil() {
