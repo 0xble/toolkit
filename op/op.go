@@ -525,6 +525,9 @@ func (e *Entry) Decode(raw json.RawMessage) (in any, apply, confirm bool, err er
 		return nil, false, false, err
 	}
 	in = e.NewInput()
+	if err := prefillSections(reflect.ValueOf(in), generic); err != nil {
+		return nil, false, false, err
+	}
 	dec := json.NewDecoder(strings.NewReader(string(clean)))
 	dec.DisallowUnknownFields()
 	if err := dec.Decode(in); err != nil {

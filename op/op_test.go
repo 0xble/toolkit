@@ -37,6 +37,14 @@ type compositeStringIn struct {
 	Items []int `json:"items,string"`
 }
 
+type sectionOpts struct {
+	N int `json:"n,omitempty" default:"3"`
+}
+
+type sectionIn struct {
+	Sub *sectionOpts `json:"sub,omitempty"`
+}
+
 // badPage has an items key that is not an array.
 type badPage struct {
 	Items string `json:"items"`
@@ -189,6 +197,23 @@ func TestSchemaIgnoresJSONStringOnCompositeTypes(t *testing.T) {
 	}
 	if _, _, _, err := r.Lookup("composite").Decode(json.RawMessage(`{"items":[1,2]}`)); err != nil {
 		t.Fatalf("composite input should decode normally: %v", err)
+	}
+}
+
+func TestPointerSectionsStayNilUnlessSent(t *testing.T) {
+	var n int
+	r := op.New("t", "v")
+	op.Add(r, op.Op[sectionIn, res]{Name: "section", Effect: op.Read, Handler: handler[sectionIn](&n)})
+	e := r.Lookup("section")
+	in, _, _, err := e.Decode(json.RawMessage(`{}`))
+	if err != nil || in.(*sectionIn).Sub != nil {
+		t.Errorf("an omitted section stays nil: %+v %v", in, err)
+	}
+	for body, want := range map[string]int{`{"sub":{}}`: 3, `{"sub":{"n":7}}`: 7} {
+		in, _, _, err := e.Decode(json.RawMessage(body))
+		if err != nil || in.(*sectionIn).Sub == nil || in.(*sectionIn).Sub.N != want {
+			t.Errorf("%s: %+v %v, want n=%d", body, in, err, want)
+		}
 	}
 }
 

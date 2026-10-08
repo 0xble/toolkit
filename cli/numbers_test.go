@@ -178,26 +178,49 @@ func stringTags() *op.Registry {
 	return r
 }
 
+// stringArgIn's id has omitempty and ,string, so an explicit empty id is
+// dropped by json.Marshal and must be re-added in its quoted form.
 type stringArgIn struct {
-	ID string `json:"id,string" arg:"" help:"Item ID"`
+	ID string `json:"id,omitempty,string" help:"Item ID"`
 }
 
-type stringArgResult struct {
+// plainArgIn shares the <id> placeholder without the tag.
+type plainArgIn struct {
+	ID string `json:"id,omitempty" help:"Item ID"`
+}
+
+type argEcho struct {
 	ID string `json:"id"`
 }
 
 func stringArgs() *op.Registry {
 	r := registry(nil)
-	op.Add(r, op.Op[stringArgIn, stringArgResult]{Name: "item.show", CLI: "item <id> show", Effect: op.Read,
-		Handler: func(_ context.Context, _ op.Request, in stringArgIn) (stringArgResult, error) {
-			return stringArgResult{ID: in.ID}, nil
+	op.Add(r, op.Op[stringArgIn, argEcho]{Name: "thing.quoted", CLI: "thing <id> quoted", Effect: op.Read,
+		Handler: func(_ context.Context, _ op.Request, in stringArgIn) (argEcho, error) {
+			return argEcho{ID: in.ID}, nil
+		}})
+	op.Add(r, op.Op[plainArgIn, argEcho]{Name: "thing.plain", CLI: "thing <id> plain", Effect: op.Read,
+		Handler: func(_ context.Context, _ op.Request, in plainArgIn) (argEcho, error) {
+			return argEcho{ID: in.ID}, nil
 		}})
 	return r
 }
 
 func TestPlaceholderValuesRespectJSONStringTags(t *testing.T) {
-	if code, out, stderr := run(t, stringArgs(), "--json", "item", "7", "show"); code != 0 || !strings.Contains(out, `"id": "7"`) {
-		t.Errorf("string-tagged placeholder: exit %d out %q stderr %q", code, out, stderr)
+	r := stringArgs()
+	for _, c := range []struct {
+		args []string
+		want string
+	}{
+		{[]string{"--json", "thing", "", "quoted"}, `"id": ""`},
+		{[]string{"--json", "thing", "a1", "quoted"}, `"id": "a1"`},
+		{[]string{"--json", "thing", "", "plain"}, `"id": ""`},
+		{[]string{"--json", "thing", "a1", "plain"}, `"id": "a1"`},
+	} {
+		code, out, stderr := run(t, r, c.args...)
+		if code != 0 || !strings.Contains(out, c.want) {
+			t.Errorf("%q: exit %d out %q stderr %q, want %s", c.args, code, out, stderr, c.want)
+		}
 	}
 }
 
