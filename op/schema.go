@@ -1,8 +1,10 @@
 package op
 
 import (
+	"bytes"
 	"encoding/json"
 	"fmt"
+	"io"
 	"reflect"
 	"slices"
 	"strconv"
@@ -265,6 +267,56 @@ func parseDefault(t reflect.Type, s string) (reflect.Value, error) {
 		return v, fmt.Errorf("default tag is supported only on string, bool and number fields, not %s", t)
 	}
 	return v, nil
+}
+
+// decodeObject decodes a JSON object as json.Unmarshal into map[string]any
+// does, except that an integer that fits int64 or uint64 keeps that type
+// instead of float64. The value then reaches the typed input exactly, even
+// above 2^53, and the schema validator still sees a number.
+func decodeObject(raw []byte) (map[string]any, bool) {
+	dec := json.NewDecoder(bytes.NewReader(raw))
+	dec.UseNumber()
+	var m map[string]any
+	if err := dec.Decode(&m); err != nil || m == nil {
+		return nil, false
+	}
+	if _, err := dec.Token(); err != io.EOF {
+		return nil, false // trailing data, which json.Unmarshal also rejects
+	}
+	if _, ok := exactNumbers(m); !ok {
+		return nil, false
+	}
+	return m, true
+}
+
+// exactNumbers replaces each json.Number in v, in place, with the int64,
+// uint64 or float64 it parses as. It fails when a number overflows float64.
+func exactNumbers(v any) (any, bool) {
+	var ok bool
+	switch v := v.(type) {
+	case json.Number:
+		if i, err := v.Int64(); err == nil {
+			return i, true
+		}
+		if u, err := strconv.ParseUint(v.String(), 10, 64); err == nil {
+			return u, true
+		}
+		f, err := v.Float64()
+		return f, err == nil
+	case map[string]any:
+		for k, x := range v {
+			if v[k], ok = exactNumbers(x); !ok {
+				return nil, false
+			}
+		}
+	case []any:
+		for i, x := range v {
+			if v[i], ok = exactNumbers(x); !ok {
+				return nil, false
+			}
+		}
+	}
+	return v, true
 }
 
 func cloneSchema(s *jsonschema.Schema) *jsonschema.Schema {

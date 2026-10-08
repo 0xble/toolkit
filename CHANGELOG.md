@@ -20,4 +20,12 @@ Released versions are described in their
   `--enabled=false`, `--label ""`, a root flag such as `--limit 0`, and a
   flag's env var set to `0`. Before, the default replaced it. HTTP and MCP
   already kept an explicit `0`, `false` or `""`.
+- An `int64` or `uint64` input above 2^53, such as a Telegram message, chat,
+  document or custom emoji ID, now reaches the operation exactly on the CLI,
+  HTTP and MCP. `op.(*Entry).Decode` used to read every number as `float64`,
+  so `5312241539987020022` arrived as `5312241539987019776` and
+  `18446744073709551615` failed to decode into a `uint64`. `--fields` output
+  likewise keeps such integers exact, paged or not. Numbers written with a
+  fraction or exponent still decode as before, so `1.0` and `1e3` still fill
+  an integer field.
 
