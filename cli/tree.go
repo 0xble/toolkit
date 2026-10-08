@@ -19,6 +19,8 @@ type app struct {
 	options []kong.Option
 	leaves  map[string]*leaf
 	globals []*global
+	// shorts are the declared short flags, which markNumbers leaves alone.
+	shorts map[rune]bool
 }
 
 // leaf is the generated kong command of one operation.
@@ -57,7 +59,6 @@ type global struct {
 	json  string
 	v     reflect.Value
 	flag  string
-	envs  []string
 	field reflect.StructField
 }
 
@@ -150,13 +151,12 @@ func (a *app) parseGlobals(g any) error {
 	return nil
 }
 
-// bindGlobalFlags finds the kong flag of each bound global, so the parse path
-// can tell an explicit flag from an untouched one.
+// bindGlobalFlags checks that each bound global is a root flag.
 func (a *app) bindGlobalFlags(k *kong.Kong) error {
 	for _, g := range a.globals {
 		for _, f := range k.Model.Flags {
 			if f.Target.IsValid() && f.Target.CanAddr() && f.Target.UnsafeAddr() == g.v.UnsafeAddr() {
-				g.flag, g.envs = f.Name, f.Tag.Envs
+				g.flag = f.Name
 			}
 		}
 		if g.flag == "" {
@@ -514,30 +514,85 @@ func (a *app) selected(kctx *kong.Context) *leaf {
 func (a *app) input(kctx *kong.Context, l *leaf) (any, error) {
 	in := l.entry.NewInput()
 	iv := reflect.ValueOf(in).Elem()
+	given := givenValues(kctx)
+	// explicit maps the json name of each input field the caller gave to its
+	// index in the input.
+	explicit := map[string][]int{}
 	for i, f := range l.fields {
-		iv.FieldByIndex(f.input).Set(l.v.Field(i))
+		fv := l.v.Field(i)
+		iv.FieldByIndex(f.input).Set(fv)
+		if given[fv.UnsafeAddr()] {
+			explicit[f.json] = f.input
+		}
 	}
 	for _, p := range l.args {
 		iv.FieldByIndex(p.input).Set(p.v)
-	}
-	explicit := map[string]bool{}
-	for _, p := range kctx.Path {
-		if p.Flag != nil {
-			explicit[p.Flag.Name] = true
-		}
+		explicit[p.json] = p.input
 	}
 	for _, g := range a.globals {
 		f, ok := l.globals[g.json]
-		if ok && (explicit[g.flag] || envSet(g.envs)) {
+		if ok && given[g.v.UnsafeAddr()] {
 			iv.FieldByIndex(f.input).Set(g.v)
+			explicit[g.json] = f.input
 		}
 	}
-	raw, err := json.Marshal(in)
+	raw, err := wireInput(iv, explicit)
 	if err != nil {
 		return nil, err
 	}
 	decoded, _, _, err := l.entry.Decode(raw)
 	return decoded, err
+}
+
+// givenValues returns the addresses of the flags and positional arguments
+// the caller gave, on the command line or through a flag's env var.
+func givenValues(kctx *kong.Context) map[uintptr]bool {
+	given := map[uintptr]bool{}
+	add := func(v *kong.Value) {
+		if v != nil && v.Target.CanAddr() {
+			given[v.Target.UnsafeAddr()] = true
+		}
+	}
+	for _, p := range kctx.Path {
+		if p.Flag != nil {
+			add(p.Flag.Value)
+		}
+		add(p.Positional)
+	}
+	for _, f := range kctx.Flags() {
+		if envSet(f.Tag.Envs) {
+			add(f.Value)
+		}
+	}
+	return given
+}
+
+// wireInput encodes the input for Decode. A field the caller gave keeps its
+// value even when it is zero and omitempty drops it, so that Decode does not
+// replace an explicit 0, false or "" with the field's default.
+func wireInput(iv reflect.Value, explicit map[string][]int) ([]byte, error) {
+	raw, err := json.Marshal(iv.Interface())
+	if err != nil {
+		return nil, err
+	}
+	var obj map[string]json.RawMessage
+	if err := json.Unmarshal(raw, &obj); err != nil {
+		return nil, err
+	}
+	missing := false
+	for name, index := range explicit {
+		if _, ok := obj[name]; ok {
+			continue
+		}
+		if obj[name], err = json.Marshal(iv.FieldByIndex(index).Interface()); err != nil {
+			return nil, err
+		}
+		missing = true
+	}
+	if !missing {
+		return raw, nil
+	}
+	return json.Marshal(obj)
 }
 
 func envSet(names []string) bool {

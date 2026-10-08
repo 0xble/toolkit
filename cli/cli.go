@@ -106,13 +106,14 @@ func Run(ctx context.Context, reg *op.Registry, opts Options, args []string) (co
 		_, _ = fmt.Fprintln(opts.Stderr, "error: invalid command tree:", err)
 		return output.ExitError
 	}
-	kctx, err := k.Parse(args)
+	kctx, err := k.Parse(markNumbers(args, app.shorts))
 	if err != nil {
 		format := output.FormatTable
 		if wantsJSON(args) {
 			format = output.FormatJSON
 		}
-		e := &output.CLIError{Code: "usage", Message: err.Error(), ExitCode: output.ExitUsage,
+		msg := strings.ReplaceAll(err.Error(), numberMark, "")
+		e := &output.CLIError{Code: "usage", Message: msg, ExitCode: output.ExitUsage,
 			Suggestions: []string{"run " + reg.Tool + " --help"}}
 		output.WriteError(opts.Stderr, format, e)
 		return output.ExitUsage
@@ -169,6 +170,7 @@ func newKong(reg *op.Registry, opts Options, extra ...kong.Option) (*app, *kong.
 	if err := a.bindGlobalFlags(k); err != nil {
 		return nil, nil, err
 	}
+	a.shorts = prepareNumbers(k)
 	return a, k, nil
 }
 

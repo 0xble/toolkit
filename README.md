@@ -88,6 +88,16 @@ field is declared once.
   `--account`) whose json tag names an input field. They fill that field in
   every operation that has it, so `tool --limit 5 notes list` and
   `tool notes list --limit 5` are the same call.
+- **Explicit values.** A `default` tag fills only an input the caller left
+  out. `--level 0`, `--enabled=false` and `--label ""` reach the handler as
+  given, as `"level": 0` does over HTTP and MCP, even on an `omitempty`
+  field.
+- **Negative numbers.** An argument shaped like a negative number (`-40`,
+  `-0.5`, `-1e3`) is a value, not a flag, so `temp -40 --side right` and
+  `--min -5` need neither `--` nor `=`. kong still decides whether it fills a
+  flag or a positional argument. A digit declared as a short flag anywhere in
+  the tool, such as `-1`, stays a flag. Other arguments that start with `-`
+  are unchanged: a string such as `-foo` still needs `--`.
 - **Reserved flags.** kong parses a command flag that reuses a root flag's
   name, alias or short form as the root flag, so the command never sees it:
   an input field named `version` would print the tool's version instead.
