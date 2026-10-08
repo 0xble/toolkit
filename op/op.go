@@ -509,8 +509,8 @@ func (e *Entry) Decode(raw json.RawMessage) (in any, apply, confirm bool, err er
 	if len(strings.TrimSpace(string(raw))) == 0 {
 		raw = json.RawMessage("{}")
 	}
-	var generic map[string]any
-	if err := json.Unmarshal(raw, &generic); err != nil || generic == nil {
+	generic, ok := decodeObject(raw)
+	if !ok {
 		return nil, false, false, Errorf(KindUsage, "invalid_input", "input must be a JSON object")
 	}
 	if err := e.resolved.Validate(generic); err != nil {
@@ -525,6 +525,9 @@ func (e *Entry) Decode(raw json.RawMessage) (in any, apply, confirm bool, err er
 		return nil, false, false, err
 	}
 	in = e.NewInput()
+	if err := prefillSections(reflect.ValueOf(in), generic); err != nil {
+		return nil, false, false, err
+	}
 	dec := json.NewDecoder(strings.NewReader(string(clean)))
 	dec.DisallowUnknownFields()
 	if err := dec.Decode(in); err != nil {

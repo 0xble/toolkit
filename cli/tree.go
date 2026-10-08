@@ -9,6 +9,7 @@ import (
 
 	"github.com/alecthomas/kong"
 
+	"github.com/0xble/toolkit/internal/jsontag"
 	"github.com/0xble/toolkit/op"
 )
 
@@ -19,6 +20,8 @@ type app struct {
 	options []kong.Option
 	leaves  map[string]*leaf
 	globals []*global
+	// shorts are the declared short flags, which markNumbers leaves alone.
+	shorts map[rune]bool
 }
 
 // leaf is the generated kong command of one operation.
@@ -42,22 +45,28 @@ type leaf struct {
 // flatField is one input field as it appears on the command line. Embedded
 // structs without a json name are flattened, as encoding/json does.
 type flatField struct {
-	json  string
-	input []int
-	gen   reflect.StructField
+	json      string
+	input     []int
+	gen       reflect.StructField
+	stringTag bool
+}
+
+type explicitField struct {
+	input     []int
+	stringTag bool
 }
 
 type placeholder struct {
-	json  string
-	input []int
-	v     reflect.Value
+	json      string
+	input     []int
+	v         reflect.Value
+	stringTag bool
 }
 
 type global struct {
 	json  string
 	v     reflect.Value
 	flag  string
-	envs  []string
 	field reflect.StructField
 }
 
@@ -150,13 +159,12 @@ func (a *app) parseGlobals(g any) error {
 	return nil
 }
 
-// bindGlobalFlags finds the kong flag of each bound global, so the parse path
-// can tell an explicit flag from an untouched one.
+// bindGlobalFlags checks that each bound global is a root flag.
 func (a *app) bindGlobalFlags(k *kong.Kong) error {
 	for _, g := range a.globals {
 		for _, f := range k.Model.Flags {
 			if f.Target.IsValid() && f.Target.CanAddr() && f.Target.UnsafeAddr() == g.v.UnsafeAddr() {
-				g.flag, g.envs = f.Name, f.Tag.Envs
+				g.flag = f.Name
 			}
 		}
 		if g.flag == "" {
@@ -309,7 +317,7 @@ func flatten(t reflect.Type, prefix []int) ([]flatField, error) {
 		}
 		names[name] = true
 		gen := reflect.StructField{Name: f.Name, Type: f.Type, Tag: f.Tag}
-		out = append(out, flatField{json: name, input: idx, gen: gen})
+		out = append(out, flatField{json: name, input: idx, gen: gen, stringTag: jsontag.Quoted(f)})
 	}
 	return out, nil
 }
@@ -419,9 +427,12 @@ func (a *app) collect(n *node, v reflect.Value, words []string, args []placehold
 		}
 		l := &leaf{entry: n.entry, v: v, fields: own, globals: globals, args: make([]placeholder, len(args))}
 		for i, p := range args {
+			// The tag is per leaf: sibling operations under one <id> may
+			// tag their id field differently.
 			for _, f := range all {
 				if f.json == p.json {
 					p.input = f.input
+					p.stringTag = f.stringTag
 				}
 			}
 			l.args[i] = p
@@ -514,30 +525,107 @@ func (a *app) selected(kctx *kong.Context) *leaf {
 func (a *app) input(kctx *kong.Context, l *leaf) (any, error) {
 	in := l.entry.NewInput()
 	iv := reflect.ValueOf(in).Elem()
+	given := givenValues(kctx)
+	// explicit maps the json name of each input field the caller gave to its
+	// index in the input.
+	explicit := map[string]explicitField{}
 	for i, f := range l.fields {
-		iv.FieldByIndex(f.input).Set(l.v.Field(i))
+		fv := l.v.Field(i)
+		iv.FieldByIndex(f.input).Set(fv)
+		if given[fv.UnsafeAddr()] {
+			explicit[f.json] = explicitField{input: f.input, stringTag: f.stringTag}
+		}
 	}
 	for _, p := range l.args {
 		iv.FieldByIndex(p.input).Set(p.v)
-	}
-	explicit := map[string]bool{}
-	for _, p := range kctx.Path {
-		if p.Flag != nil {
-			explicit[p.Flag.Name] = true
-		}
+		explicit[p.json] = explicitField{input: p.input, stringTag: p.stringTag}
 	}
 	for _, g := range a.globals {
 		f, ok := l.globals[g.json]
-		if ok && (explicit[g.flag] || envSet(g.envs)) {
+		if ok && given[g.v.UnsafeAddr()] {
 			iv.FieldByIndex(f.input).Set(g.v)
+			explicit[g.json] = explicitField{input: f.input, stringTag: f.stringTag}
 		}
 	}
-	raw, err := json.Marshal(in)
+	raw, err := wireInput(iv, explicit)
 	if err != nil {
 		return nil, err
 	}
 	decoded, _, _, err := l.entry.Decode(raw)
 	return decoded, err
+}
+
+// givenValues returns the addresses of the flags and positional arguments
+// the caller gave, on the command line or through a flag's env var.
+func givenValues(kctx *kong.Context) map[uintptr]bool {
+	given := map[uintptr]bool{}
+	add := func(v *kong.Value) {
+		if v != nil && v.Target.CanAddr() {
+			given[v.Target.UnsafeAddr()] = true
+		}
+	}
+	for _, p := range kctx.Path {
+		if p.Flag != nil {
+			add(p.Flag.Value)
+		}
+		add(p.Positional)
+	}
+	for _, f := range kctx.Flags() {
+		if envSet(f.Tag.Envs) {
+			add(f.Value)
+		}
+	}
+	return given
+}
+
+// wireInput encodes the input for Decode. A field the caller gave keeps its
+// value even when it is zero and omitempty drops it, so that Decode does not
+// replace an explicit 0, false or "" with the field's default.
+func wireInput(iv reflect.Value, explicit map[string]explicitField) ([]byte, error) {
+	raw, err := json.Marshal(iv.Interface())
+	if err != nil {
+		return nil, err
+	}
+	var obj map[string]json.RawMessage
+	if err := json.Unmarshal(raw, &obj); err != nil {
+		return nil, err
+	}
+	missing := false
+	for name, field := range explicit {
+		if _, ok := obj[name]; ok {
+			continue
+		}
+		if obj[name], err = marshalExplicit(iv.FieldByIndex(field.input), field.stringTag); err != nil {
+			return nil, err
+		}
+		missing = true
+	}
+	if !missing {
+		return raw, nil
+	}
+	return json.Marshal(obj)
+}
+
+func marshalExplicit(v reflect.Value, stringTag bool) ([]byte, error) {
+	if !stringTag {
+		return json.Marshal(v.Interface())
+	}
+	t := reflect.StructOf([]reflect.StructField{{
+		Name: "Value",
+		Type: v.Type(),
+		Tag:  reflect.StructTag(`json:",string"`),
+	}})
+	h := reflect.New(t).Elem()
+	h.Field(0).Set(v)
+	b, err := json.Marshal(h.Interface())
+	if err != nil {
+		return nil, err
+	}
+	var obj map[string]json.RawMessage
+	if err := json.Unmarshal(b, &obj); err != nil {
+		return nil, err
+	}
+	return obj["Value"], nil
 }
 
 func envSet(names []string) bool {

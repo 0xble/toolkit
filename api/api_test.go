@@ -227,3 +227,37 @@ func TestCLIOnlyInputRefused(t *testing.T) {
 		t.Errorf("GET /ops does not list the cli-only input: %s", w.Body.String())
 	}
 }
+
+type knobIn struct {
+	Level   int    `json:"level,omitempty" default:"50"`
+	Enabled bool   `json:"enabled,omitempty" default:"true"`
+	Label   string `json:"label,omitempty" default:"auto"`
+}
+
+type knobOut struct {
+	Level   int    `json:"level"`
+	Enabled bool   `json:"enabled"`
+	Label   string `json:"label"`
+}
+
+// TestExplicitZeroKeepsItsValue checks that an explicit 0, false or "" for a
+// field with a default reaches the handler, and that an omitted one takes the
+// default.
+func TestExplicitZeroKeepsItsValue(t *testing.T) {
+	r := op.New("t", "v")
+	op.Add(r, op.Op[knobIn, knobOut]{Name: "knob.get", Effect: op.Read, Handler: func(_ context.Context, _ op.Request, in knobIn) (knobOut, error) {
+		return knobOut(in), nil
+	}})
+	h := api.Handler(r, api.Options{})
+	for body, want := range map[string]string{
+		`{}`:                                     `{"level":50,"enabled":true,"label":"auto"}`,
+		`{"level":0,"enabled":false,"label":""}`: `{"level":0,"enabled":false,"label":""}`,
+		`{"level":7}`:                            `{"level":7,"enabled":true,"label":"auto"}`,
+	} {
+		w := httptest.NewRecorder()
+		h.ServeHTTP(w, httptest.NewRequest(http.MethodPost, "/ops/knob.get", strings.NewReader(body)))
+		if w.Code != 200 || strings.TrimSpace(w.Body.String()) != want {
+			t.Errorf("%s: %d %s; want %s", body, w.Code, w.Body.String(), want)
+		}
+	}
+}

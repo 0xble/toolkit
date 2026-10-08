@@ -24,6 +24,23 @@ type listIn struct {
 	Tag   string `json:"tag,omitempty"`
 }
 
+type nestedStringIn struct {
+	Nested nestedStringFields `json:"nested"`
+}
+
+type nestedStringFields struct {
+	Count   int  `json:"count,string" default:"5"`
+	Enabled bool `json:"enabled,omitempty,string" default:"true"`
+}
+
+type sectionOpts struct {
+	N int `json:"n,omitempty" default:"3"`
+}
+
+type sectionIn struct {
+	Sub *sectionOpts `json:"sub,omitempty"`
+}
+
 // badPage has an items key that is not an array.
 type badPage struct {
 	Items string `json:"items"`
@@ -135,6 +152,51 @@ func TestDecodeValidatesAndAppliesDefaults(t *testing.T) {
 	}
 	if s := e.InputSchema(); string(s.Properties["limit"].Default) != "20" || len(s.Required) != 0 {
 		t.Errorf("default not in schema: %+v", s)
+	}
+}
+
+func TestSchemaAnnotatesJSONStringDefaultsAndNestedFields(t *testing.T) {
+	var n int
+	r := op.New("t", "v")
+	op.Add(r, op.Op[nestedStringIn, res]{Name: "nested", Effect: op.Read, Handler: handler[nestedStringIn](&n)})
+	e := r.Lookup("nested")
+	s := e.InputSchema()
+	nested := s.Properties["nested"]
+	if nested == nil {
+		t.Fatal("nested property missing")
+	}
+	for name, want := range map[string]string{"count": `"5"`, "enabled": `"true"`} {
+		p := nested.Properties[name]
+		if p == nil || p.Type != "string" || string(p.Default) != want {
+			t.Errorf("nested.%s: schema=%+v, want string default %s", name, p, want)
+		}
+	}
+	if len(nested.Required) != 0 {
+		t.Errorf("nested defaults remain required: %v", nested.Required)
+	}
+	if _, _, _, err := e.Decode(json.RawMessage(`{"nested":{"count":"6"}}`)); err != nil {
+		t.Fatalf("string-tagged nested input should decode: %v", err)
+	}
+	in, _, _, err := e.Decode(json.RawMessage(`{"nested":{}}`))
+	if err != nil || in.(*nestedStringIn).Nested.Count != 5 || !in.(*nestedStringIn).Nested.Enabled {
+		t.Errorf("nested defaults: input=%+v err=%v", in, err)
+	}
+}
+
+func TestPointerSectionsStayNilUnlessSent(t *testing.T) {
+	var n int
+	r := op.New("t", "v")
+	op.Add(r, op.Op[sectionIn, res]{Name: "section", Effect: op.Read, Handler: handler[sectionIn](&n)})
+	e := r.Lookup("section")
+	in, _, _, err := e.Decode(json.RawMessage(`{}`))
+	if err != nil || in.(*sectionIn).Sub != nil {
+		t.Errorf("an omitted section stays nil: %+v %v", in, err)
+	}
+	for body, want := range map[string]int{`{"sub":{}}`: 3, `{"sub":{"n":7}}`: 7} {
+		in, _, _, err := e.Decode(json.RawMessage(body))
+		if err != nil || in.(*sectionIn).Sub == nil || in.(*sectionIn).Sub.N != want {
+			t.Errorf("%s: %+v %v, want n=%d", body, in, err, want)
+		}
 	}
 }
 

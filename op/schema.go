@@ -1,8 +1,10 @@
 package op
 
 import (
+	"bytes"
 	"encoding/json"
 	"fmt"
+	"io"
 	"reflect"
 	"slices"
 	"strconv"
@@ -10,6 +12,8 @@ import (
 	"unicode"
 
 	"github.com/google/jsonschema-go/jsonschema"
+
+	"github.com/0xble/toolkit/internal/jsontag"
 )
 
 // anyJSON returns the schema of an output that may be any JSON value. It
@@ -41,31 +45,80 @@ func schemaFor(t reflect.Type) (*jsonschema.Schema, error) {
 }
 
 func annotate(s *jsonschema.Schema, t reflect.Type) error {
+	if s == nil {
+		return nil
+	}
 	for t.Kind() == reflect.Pointer {
 		t = t.Elem()
 	}
-	if t.Kind() != reflect.Struct || s == nil {
-		return nil
-	}
-	for name, f := range jsonFields(t) {
-		p, ok := s.Properties[name]
-		if !ok {
-			continue
-		}
-		if p.Description == "" {
-			p.Description = f.Tag.Get("help")
-		}
-		if def, ok := f.Tag.Lookup("default"); ok {
-			v, err := parseDefault(f.Type, def)
-			if err != nil {
-				return fmt.Errorf("field %s: %w", f.Name, err)
+	switch t.Kind() {
+	case reflect.Struct:
+		for name, f := range jsonFields(t) {
+			p, ok := s.Properties[name]
+			if !ok {
+				continue
 			}
-			b, _ := json.Marshal(v.Interface())
-			p.Default = b
-			s.Required = slices.DeleteFunc(s.Required, func(r string) bool { return r == name })
+			if err := annotate(p, f.Type); err != nil {
+				return err
+			}
+			if p.Description == "" {
+				p.Description = f.Tag.Get("help")
+			}
+			stringTag := jsontag.Quoted(f)
+			if stringTag {
+				p.Type = "string"
+				p.Types = nil
+			}
+			if def, ok := f.Tag.Lookup("default"); ok {
+				v, err := parseDefault(f.Type, def)
+				if err != nil {
+					return fmt.Errorf("field %s: %w", f.Name, err)
+				}
+				b, err := marshalDefault(v, stringTag)
+				if err != nil {
+					return fmt.Errorf("field %s: %w", f.Name, err)
+				}
+				p.Default = b
+				s.Required = slices.DeleteFunc(s.Required, func(r string) bool { return r == name })
+			}
+		}
+	case reflect.Array, reflect.Slice:
+		if s.Items != nil {
+			return annotate(s.Items, t.Elem())
+		}
+		for _, item := range s.ItemsArray {
+			if err := annotate(item, t.Elem()); err != nil {
+				return err
+			}
+		}
+	case reflect.Map:
+		if s.AdditionalProperties != nil {
+			return annotate(s.AdditionalProperties, t.Elem())
 		}
 	}
 	return nil
+}
+
+func marshalDefault(v reflect.Value, stringTag bool) ([]byte, error) {
+	if !stringTag {
+		return json.Marshal(v.Interface())
+	}
+	t := reflect.StructOf([]reflect.StructField{{
+		Name: "Value",
+		Type: v.Type(),
+		Tag:  reflect.StructTag(`json:",string"`),
+	}})
+	h := reflect.New(t).Elem()
+	h.Field(0).Set(v)
+	b, err := json.Marshal(h.Interface())
+	if err != nil {
+		return nil, err
+	}
+	var obj map[string]json.RawMessage
+	if err := json.Unmarshal(b, &obj); err != nil {
+		return nil, err
+	}
+	return obj["Value"], nil
 }
 
 // jsonFields maps wire names to struct fields, following encoding/json:
@@ -206,7 +259,20 @@ func newInput(t reflect.Type) (any, error) {
 	return v.Interface(), nil
 }
 
+// applyDefaults sets the default tags of v's fields, including those of
+// nested struct fields. A nil pointer to a struct is left nil, so a handler
+// can still tell an omitted optional section from one the caller sent.
+// Decode fills a sent section's defaults through prefillSections.
 func applyDefaults(v reflect.Value) error {
+	for v.Kind() == reflect.Pointer {
+		if v.IsNil() {
+			return nil
+		}
+		v = v.Elem()
+	}
+	if v.Kind() != reflect.Struct {
+		return nil
+	}
 	t := v.Type()
 	for i := range t.NumField() {
 		f := t.Field(i)
@@ -219,8 +285,17 @@ func applyDefaults(v reflect.Value) error {
 			}
 			continue
 		}
+		if !f.IsExported() || !fv.CanSet() {
+			continue
+		}
+		if f.Type.Kind() == reflect.Struct || f.Type.Kind() == reflect.Pointer {
+			if err := applyDefaults(fv); err != nil {
+				return err
+			}
+			continue
+		}
 		def, ok := f.Tag.Lookup("default")
-		if !ok || !f.IsExported() {
+		if !ok {
 			continue
 		}
 		d, err := parseDefault(f.Type, def)
@@ -228,6 +303,46 @@ func applyDefaults(v reflect.Value) error {
 			return fmt.Errorf("field %s: %w", f.Name, err)
 		}
 		fv.Set(d)
+	}
+	return nil
+}
+
+// prefillSections allocates each pointer-to-struct section the caller sent
+// in obj and fills its defaults before decoding, so a sent section gets the
+// same defaults as a plain nested struct while an omitted one stays nil.
+//
+// It does not reach fields promoted through an embedded nil pointer (an
+// anonymous *Base with no json name). encoding/json still allocates that
+// embed and fills the keys sent, but the embed's own default tags do not
+// apply. The CLI rejects embedded pointers, so only HTTP and MCP see this.
+func prefillSections(v reflect.Value, obj map[string]any) error {
+	for v.Kind() == reflect.Pointer {
+		if v.IsNil() {
+			return nil
+		}
+		v = v.Elem()
+	}
+	if v.Kind() != reflect.Struct {
+		return nil
+	}
+	for name, f := range jsonFields(v.Type()) {
+		sub, ok := obj[name].(map[string]any)
+		if !ok {
+			continue
+		}
+		fv, err := v.FieldByIndexErr(f.Index)
+		if err != nil || !fv.CanSet() {
+			continue
+		}
+		if fv.Kind() == reflect.Pointer && fv.Type().Elem().Kind() == reflect.Struct && fv.IsNil() {
+			fv.Set(reflect.New(fv.Type().Elem()))
+			if err := applyDefaults(fv); err != nil {
+				return err
+			}
+		}
+		if err := prefillSections(fv, sub); err != nil {
+			return err
+		}
 	}
 	return nil
 }
@@ -265,6 +380,56 @@ func parseDefault(t reflect.Type, s string) (reflect.Value, error) {
 		return v, fmt.Errorf("default tag is supported only on string, bool and number fields, not %s", t)
 	}
 	return v, nil
+}
+
+// decodeObject decodes a JSON object as json.Unmarshal into map[string]any
+// does, except that an integer that fits int64 or uint64 keeps that type
+// instead of float64. The value then reaches the typed input exactly, even
+// above 2^53, and the schema validator still sees a number.
+func decodeObject(raw []byte) (map[string]any, bool) {
+	dec := json.NewDecoder(bytes.NewReader(raw))
+	dec.UseNumber()
+	var m map[string]any
+	if err := dec.Decode(&m); err != nil || m == nil {
+		return nil, false
+	}
+	if _, err := dec.Token(); err != io.EOF {
+		return nil, false // trailing data, which json.Unmarshal also rejects
+	}
+	if _, ok := exactNumbers(m); !ok {
+		return nil, false
+	}
+	return m, true
+}
+
+// exactNumbers replaces each json.Number in v, in place, with the int64,
+// uint64 or float64 it parses as. It fails when a number overflows float64.
+func exactNumbers(v any) (any, bool) {
+	var ok bool
+	switch v := v.(type) {
+	case json.Number:
+		if i, err := v.Int64(); err == nil {
+			return i, true
+		}
+		if u, err := strconv.ParseUint(v.String(), 10, 64); err == nil {
+			return u, true
+		}
+		f, err := v.Float64()
+		return f, err == nil
+	case map[string]any:
+		for k, x := range v {
+			if v[k], ok = exactNumbers(x); !ok {
+				return nil, false
+			}
+		}
+	case []any:
+		for i, x := range v {
+			if v[i], ok = exactNumbers(x); !ok {
+				return nil, false
+			}
+		}
+	}
+	return v, true
 }
 
 func cloneSchema(s *jsonschema.Schema) *jsonschema.Schema {

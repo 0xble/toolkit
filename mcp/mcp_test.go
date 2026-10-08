@@ -230,3 +230,42 @@ func TestCLIOnlyInputRefused(t *testing.T) {
 		t.Errorf("handler ran %d times", calls)
 	}
 }
+
+type knobIn struct {
+	Level   int    `json:"level,omitempty" default:"50"`
+	Enabled bool   `json:"enabled,omitempty" default:"true"`
+	Label   string `json:"label,omitempty" default:"auto"`
+}
+
+type knobOut struct {
+	Level   int    `json:"level"`
+	Enabled bool   `json:"enabled"`
+	Label   string `json:"label"`
+}
+
+// TestExplicitZeroKeepsItsValue checks that an explicit 0, false or "" for a
+// field with a default reaches the handler, and that an omitted one takes the
+// default.
+func TestExplicitZeroKeepsItsValue(t *testing.T) {
+	r := op.New("t", "v")
+	op.Add(r, op.Op[knobIn, knobOut]{Name: "knob.get", Effect: op.Read, MCP: true, Handler: func(_ context.Context, _ op.Request, in knobIn) (knobOut, error) {
+		return knobOut(in), nil
+	}})
+	cs := toolkittest.MCPClient(t, r, nil)
+	for _, c := range []struct {
+		args map[string]any
+		want string
+	}{
+		{map[string]any{}, `{"enabled":true,"label":"auto","level":50}`},
+		{map[string]any{"level": 0, "enabled": false, "label": ""}, `{"enabled":false,"label":"","level":0}`},
+		{map[string]any{"level": 7}, `{"enabled":true,"label":"auto","level":7}`},
+	} {
+		res, err := cs.CallTool(context.Background(), &sdk.CallToolParams{Name: "knob_get", Arguments: c.args})
+		if err != nil || res.IsError {
+			t.Fatalf("%v: %+v %v", c.args, res, err)
+		}
+		if b, _ := json.Marshal(res.StructuredContent); string(b) != c.want {
+			t.Errorf("%v: %s; want %s", c.args, b, c.want)
+		}
+	}
+}
