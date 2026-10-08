@@ -178,6 +178,29 @@ func stringTags() *op.Registry {
 	return r
 }
 
+type stringArgIn struct {
+	ID string `json:"id,string" arg:"" help:"Item ID"`
+}
+
+type stringArgResult struct {
+	ID string `json:"id"`
+}
+
+func stringArgs() *op.Registry {
+	r := registry(nil)
+	op.Add(r, op.Op[stringArgIn, stringArgResult]{Name: "item.show", CLI: "item <id> show", Effect: op.Read,
+		Handler: func(_ context.Context, _ op.Request, in stringArgIn) (stringArgResult, error) {
+			return stringArgResult{ID: in.ID}, nil
+		}})
+	return r
+}
+
+func TestPlaceholderValuesRespectJSONStringTags(t *testing.T) {
+	if code, out, stderr := run(t, stringArgs(), "--json", "item", "7", "show"); code != 0 || !strings.Contains(out, `"id": "7"`) {
+		t.Errorf("string-tagged placeholder: exit %d out %q stderr %q", code, out, stderr)
+	}
+}
+
 func TestExplicitValuesRespectJSONStringTags(t *testing.T) {
 	for _, c := range []struct {
 		args []string

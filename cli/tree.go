@@ -56,9 +56,10 @@ type explicitField struct {
 }
 
 type placeholder struct {
-	json  string
-	input []int
-	v     reflect.Value
+	json      string
+	input     []int
+	v         reflect.Value
+	stringTag bool
 }
 
 type global struct {
@@ -315,7 +316,7 @@ func flatten(t reflect.Type, prefix []int) ([]flatField, error) {
 		}
 		names[name] = true
 		gen := reflect.StructField{Name: f.Name, Type: f.Type, Tag: f.Tag}
-		out = append(out, flatField{json: name, input: idx, gen: gen, stringTag: hasJSONOption(tag, "string")})
+		out = append(out, flatField{json: name, input: idx, gen: gen, stringTag: hasJSONOption(tag, "string") && jsonStringType(f.Type)})
 	}
 	return out, nil
 }
@@ -328,6 +329,21 @@ func hasJSONOption(tag, want string) bool {
 		}
 	}
 	return false
+}
+
+func jsonStringType(t reflect.Type) bool {
+	for t.Kind() == reflect.Pointer {
+		t = t.Elem()
+	}
+	switch t.Kind() {
+	case reflect.String, reflect.Bool,
+		reflect.Int, reflect.Int8, reflect.Int16, reflect.Int32, reflect.Int64,
+		reflect.Uint, reflect.Uint8, reflect.Uint16, reflect.Uint32, reflect.Uint64,
+		reflect.Float32, reflect.Float64:
+		return true
+	default:
+		return false
+	}
 }
 
 // buildType returns the kong command struct for n. A leaf holds the
@@ -454,7 +470,7 @@ func (a *app) collect(n *node, v reflect.Value, words []string, args []placehold
 		if c.arg != "" {
 			name := argFieldName(c.arg)
 			w := v.FieldByName(name)
-			next := append(append([]placeholder(nil), args...), placeholder{json: c.arg, v: w.Field(0)})
+			next := append(append([]placeholder(nil), args...), placeholder{json: c.arg, v: w.Field(0), stringTag: placeholderStringTag(c)})
 			if err := a.collect(c, w, words, next); err != nil {
 				return err
 			}
@@ -473,6 +489,23 @@ func placeholderSet(args []placeholder) map[string]bool {
 		m[p.json] = true
 	}
 	return m
+}
+
+func placeholderStringTag(n *node) bool {
+	if n.entry != nil {
+		all, _ := flatten(n.entry.In, nil)
+		for _, f := range all {
+			if f.json == n.arg {
+				return f.stringTag
+			}
+		}
+	}
+	for _, c := range n.children {
+		if tag := placeholderStringTag(c); tag {
+			return true
+		}
+	}
+	return false
 }
 
 // placeholderHelp reuses the help text of the input field the placeholder
@@ -543,7 +576,7 @@ func (a *app) input(kctx *kong.Context, l *leaf) (any, error) {
 	}
 	for _, p := range l.args {
 		iv.FieldByIndex(p.input).Set(p.v)
-		explicit[p.json] = explicitField{input: p.input}
+		explicit[p.json] = explicitField{input: p.input, stringTag: p.stringTag}
 	}
 	for _, g := range a.globals {
 		f, ok := l.globals[g.json]

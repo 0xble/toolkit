@@ -33,6 +33,10 @@ type nestedStringFields struct {
 	Enabled bool `json:"enabled,omitempty,string" default:"true"`
 }
 
+type compositeStringIn struct {
+	Items []int `json:"items,string"`
+}
+
 // badPage has an items key that is not an array.
 type badPage struct {
 	Items string `json:"items"`
@@ -168,6 +172,23 @@ func TestSchemaAnnotatesJSONStringDefaultsAndNestedFields(t *testing.T) {
 	}
 	if _, _, _, err := e.Decode(json.RawMessage(`{"nested":{"count":"6"}}`)); err != nil {
 		t.Fatalf("string-tagged nested input should decode: %v", err)
+	}
+	in, _, _, err := e.Decode(json.RawMessage(`{"nested":{}}`))
+	if err != nil || in.(*nestedStringIn).Nested.Count != 5 || !in.(*nestedStringIn).Nested.Enabled {
+		t.Errorf("nested defaults: input=%+v err=%v", in, err)
+	}
+}
+
+func TestSchemaIgnoresJSONStringOnCompositeTypes(t *testing.T) {
+	var n int
+	r := op.New("t", "v")
+	op.Add(r, op.Op[compositeStringIn, res]{Name: "composite", Effect: op.Read, Handler: handler[compositeStringIn](&n)})
+	p := r.Lookup("composite").InputSchema().Properties["items"]
+	if p == nil || p.Type == "string" || p.Items == nil {
+		t.Fatalf("composite ,string tag changed schema: %+v", p)
+	}
+	if _, _, _, err := r.Lookup("composite").Decode(json.RawMessage(`{"items":[1,2]}`)); err != nil {
+		t.Fatalf("composite input should decode normally: %v", err)
 	}
 }
 

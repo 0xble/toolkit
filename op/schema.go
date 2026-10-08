@@ -62,7 +62,7 @@ func annotate(s *jsonschema.Schema, t reflect.Type) error {
 			if p.Description == "" {
 				p.Description = f.Tag.Get("help")
 			}
-			stringTag := hasJSONOption(f.Tag.Get("json"), "string")
+			stringTag := hasJSONOption(f.Tag.Get("json"), "string") && jsonStringType(f.Type)
 			if stringTag {
 				p.Type = "string"
 				p.Types = nil
@@ -127,6 +127,21 @@ func hasJSONOption(tag, want string) bool {
 		}
 	}
 	return false
+}
+
+func jsonStringType(t reflect.Type) bool {
+	for t.Kind() == reflect.Pointer {
+		t = t.Elem()
+	}
+	switch t.Kind() {
+	case reflect.String, reflect.Bool,
+		reflect.Int, reflect.Int8, reflect.Int16, reflect.Int32, reflect.Int64,
+		reflect.Uint, reflect.Uint8, reflect.Uint16, reflect.Uint32, reflect.Uint64,
+		reflect.Float32, reflect.Float64:
+		return true
+	default:
+		return false
+	}
 }
 
 // jsonFields maps wire names to struct fields, following encoding/json:
@@ -268,6 +283,18 @@ func newInput(t reflect.Type) (any, error) {
 }
 
 func applyDefaults(v reflect.Value) error {
+	for v.Kind() == reflect.Pointer {
+		if v.IsNil() {
+			if !typeHasDefaults(v.Type().Elem(), map[reflect.Type]bool{}) {
+				return nil
+			}
+			v.Set(reflect.New(v.Type().Elem()))
+		}
+		v = v.Elem()
+	}
+	if v.Kind() != reflect.Struct {
+		return nil
+	}
 	t := v.Type()
 	for i := range t.NumField() {
 		f := t.Field(i)
@@ -280,8 +307,25 @@ func applyDefaults(v reflect.Value) error {
 			}
 			continue
 		}
+		if !f.IsExported() || !fv.CanSet() {
+			continue
+		}
+		if f.Type.Kind() == reflect.Struct {
+			if err := applyDefaults(fv); err != nil {
+				return err
+			}
+			continue
+		}
+		if f.Type.Kind() == reflect.Pointer {
+			if typeHasDefaults(f.Type, map[reflect.Type]bool{}) {
+				if err := applyDefaults(fv); err != nil {
+					return err
+				}
+			}
+			continue
+		}
 		def, ok := f.Tag.Lookup("default")
-		if !ok || !f.IsExported() {
+		if !ok {
 			continue
 		}
 		d, err := parseDefault(f.Type, def)
@@ -291,6 +335,32 @@ func applyDefaults(v reflect.Value) error {
 		fv.Set(d)
 	}
 	return nil
+}
+
+func typeHasDefaults(t reflect.Type, seen map[reflect.Type]bool) bool {
+	for t.Kind() == reflect.Pointer {
+		t = t.Elem()
+	}
+	if t.Kind() != reflect.Struct || seen[t] {
+		return false
+	}
+	seen[t] = true
+	defer delete(seen, t)
+	for i := range t.NumField() {
+		f := t.Field(i)
+		if !f.IsExported() {
+			continue
+		}
+		if _, ok := f.Tag.Lookup("default"); ok {
+			return true
+		}
+		if f.Type.Kind() == reflect.Struct || f.Type.Kind() == reflect.Pointer {
+			if typeHasDefaults(f.Type, seen) {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 func parseDefault(t reflect.Type, s string) (reflect.Value, error) {
