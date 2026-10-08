@@ -44,9 +44,15 @@ type leaf struct {
 // flatField is one input field as it appears on the command line. Embedded
 // structs without a json name are flattened, as encoding/json does.
 type flatField struct {
-	json  string
-	input []int
-	gen   reflect.StructField
+	json      string
+	input     []int
+	gen       reflect.StructField
+	stringTag bool
+}
+
+type explicitField struct {
+	input     []int
+	stringTag bool
 }
 
 type placeholder struct {
@@ -309,9 +315,19 @@ func flatten(t reflect.Type, prefix []int) ([]flatField, error) {
 		}
 		names[name] = true
 		gen := reflect.StructField{Name: f.Name, Type: f.Type, Tag: f.Tag}
-		out = append(out, flatField{json: name, input: idx, gen: gen})
+		out = append(out, flatField{json: name, input: idx, gen: gen, stringTag: hasJSONOption(tag, "string")})
 	}
 	return out, nil
+}
+
+func hasJSONOption(tag, want string) bool {
+	parts := strings.Split(tag, ",")
+	for _, part := range parts[1:] {
+		if part == want {
+			return true
+		}
+	}
+	return false
 }
 
 // buildType returns the kong command struct for n. A leaf holds the
@@ -517,23 +533,23 @@ func (a *app) input(kctx *kong.Context, l *leaf) (any, error) {
 	given := givenValues(kctx)
 	// explicit maps the json name of each input field the caller gave to its
 	// index in the input.
-	explicit := map[string][]int{}
+	explicit := map[string]explicitField{}
 	for i, f := range l.fields {
 		fv := l.v.Field(i)
 		iv.FieldByIndex(f.input).Set(fv)
 		if given[fv.UnsafeAddr()] {
-			explicit[f.json] = f.input
+			explicit[f.json] = explicitField{input: f.input, stringTag: f.stringTag}
 		}
 	}
 	for _, p := range l.args {
 		iv.FieldByIndex(p.input).Set(p.v)
-		explicit[p.json] = p.input
+		explicit[p.json] = explicitField{input: p.input}
 	}
 	for _, g := range a.globals {
 		f, ok := l.globals[g.json]
 		if ok && given[g.v.UnsafeAddr()] {
 			iv.FieldByIndex(f.input).Set(g.v)
-			explicit[g.json] = f.input
+			explicit[g.json] = explicitField{input: f.input, stringTag: f.stringTag}
 		}
 	}
 	raw, err := wireInput(iv, explicit)
@@ -570,7 +586,7 @@ func givenValues(kctx *kong.Context) map[uintptr]bool {
 // wireInput encodes the input for Decode. A field the caller gave keeps its
 // value even when it is zero and omitempty drops it, so that Decode does not
 // replace an explicit 0, false or "" with the field's default.
-func wireInput(iv reflect.Value, explicit map[string][]int) ([]byte, error) {
+func wireInput(iv reflect.Value, explicit map[string]explicitField) ([]byte, error) {
 	raw, err := json.Marshal(iv.Interface())
 	if err != nil {
 		return nil, err
@@ -580,11 +596,11 @@ func wireInput(iv reflect.Value, explicit map[string][]int) ([]byte, error) {
 		return nil, err
 	}
 	missing := false
-	for name, index := range explicit {
+	for name, field := range explicit {
 		if _, ok := obj[name]; ok {
 			continue
 		}
-		if obj[name], err = json.Marshal(iv.FieldByIndex(index).Interface()); err != nil {
+		if obj[name], err = marshalExplicit(iv.FieldByIndex(field.input), field.stringTag); err != nil {
 			return nil, err
 		}
 		missing = true
@@ -593,6 +609,28 @@ func wireInput(iv reflect.Value, explicit map[string][]int) ([]byte, error) {
 		return raw, nil
 	}
 	return json.Marshal(obj)
+}
+
+func marshalExplicit(v reflect.Value, stringTag bool) ([]byte, error) {
+	if !stringTag {
+		return json.Marshal(v.Interface())
+	}
+	t := reflect.StructOf([]reflect.StructField{{
+		Name: "Value",
+		Type: v.Type(),
+		Tag:  reflect.StructTag(`json:",string"`),
+	}})
+	h := reflect.New(t).Elem()
+	h.Field(0).Set(v)
+	b, err := json.Marshal(h.Interface())
+	if err != nil {
+		return nil, err
+	}
+	var obj map[string]json.RawMessage
+	if err := json.Unmarshal(b, &obj); err != nil {
+		return nil, err
+	}
+	return obj["Value"], nil
 }
 
 func envSet(names []string) bool {

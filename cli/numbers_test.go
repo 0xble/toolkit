@@ -3,6 +3,7 @@ package cli_test
 import (
 	"context"
 	"encoding/json"
+	"reflect"
 	"strings"
 	"testing"
 
@@ -156,6 +157,39 @@ func knobs() *op.Registry {
 			return result{In: knobView(in)}, nil
 		}})
 	return r
+}
+
+type stringTagIn struct {
+	Count   int  `json:"count,omitempty,string" default:"7" help:"Count"`
+	Enabled bool `json:"enabled,omitempty,string" default:"true" help:"Enabled"`
+}
+
+type stringTagView struct {
+	Count   int  `json:"count,string"`
+	Enabled bool `json:"enabled,string"`
+}
+
+func stringTags() *op.Registry {
+	r := registry(nil)
+	op.Add(r, op.Op[stringTagIn, result]{Name: "string.tags", Effect: op.Read,
+		Handler: func(_ context.Context, _ op.Request, in stringTagIn) (result, error) {
+			return result{In: stringTagView(in)}, nil
+		}})
+	return r
+}
+
+func TestExplicitValuesRespectJSONStringTags(t *testing.T) {
+	for _, c := range []struct {
+		args []string
+		want map[string]any
+	}{
+		{[]string{"--json", "string", "tags", "--count", "0", "--enabled=false"}, map[string]any{"count": "0", "enabled": "false"}},
+		{[]string{"--json", "string", "tags", "--count", "7", "--enabled"}, map[string]any{"count": "7", "enabled": "true"}},
+	} {
+		if got := inOf(t, stringTags(), c.args...); !reflect.DeepEqual(got, c.want) {
+			t.Errorf("%q: got %v, want %v", c.args, got, c.want)
+		}
+	}
 }
 
 func TestExplicitZeroKeepsItsValue(t *testing.T) {

@@ -57,6 +57,10 @@ func annotate(s *jsonschema.Schema, t reflect.Type) error {
 		if p.Description == "" {
 			p.Description = f.Tag.Get("help")
 		}
+		if hasJSONOption(f.Tag.Get("json"), "string") {
+			p.Type = "string"
+			p.Types = nil
+		}
 		if def, ok := f.Tag.Lookup("default"); ok {
 			v, err := parseDefault(f.Type, def)
 			if err != nil {
@@ -68,6 +72,16 @@ func annotate(s *jsonschema.Schema, t reflect.Type) error {
 		}
 	}
 	return nil
+}
+
+func hasJSONOption(tag, want string) bool {
+	parts := strings.Split(tag, ",")
+	for _, part := range parts[1:] {
+		if part == want {
+			return true
+		}
+	}
+	return false
 }
 
 // jsonFields maps wire names to struct fields, following encoding/json:
