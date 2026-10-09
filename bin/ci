@@ -90,6 +90,7 @@ lane_test_short() {
 lane_tool_pins() {
   log "lane tool pins"
   bash ci/check-govulncheck-pin.sh
+  bash ci/check-go-version-resolution.sh
 }
 
 lane_lint() {

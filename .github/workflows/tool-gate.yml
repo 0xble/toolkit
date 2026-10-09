@@ -14,8 +14,8 @@ on:
     inputs:
       go-version-file:
         description: >-
-          File that actions/setup-go reads the Go version from, when no CI
-          image is used. Pin a patched toolchain there.
+          File whose Go minor version actions/setup-go uses when no CI image is
+          used. The newest available patch in that minor is selected.
         type: string
         default: go.mod
       runner:
@@ -141,10 +141,53 @@ jobs:
           assert_candidate
 
       # Runner mode: the hosted runner is the execution environment.
+      - name: Resolve the Go minor version
+        id: go_version
+        if: ${{ inputs.ci-image-dir == '' }}
+        env:
+          GO_VERSION_FILE: ${{ inputs.go-version-file }}
+        run: |
+          set -euo pipefail
+          [ -f "$GO_VERSION_FILE" ] || {
+            echo "Go version file does not exist: $GO_VERSION_FILE" >&2
+            exit 1
+          }
+          case "$(basename "$GO_VERSION_FILE")" in
+            go.mod|go.work)
+              go_version="$(awk '
+                $1 == "toolchain" { toolchain_version = $2 }
+                $1 == "go" { go_version = $2 }
+                END {
+                  if (toolchain_version != "") {
+                    sub(/^go/, "", toolchain_version)
+                    print toolchain_version
+                  } else {
+                    print go_version
+                  }
+                }
+              ' "$GO_VERSION_FILE")"
+              ;;
+            .tool-versions)
+              go_version="$(awk '$1 == "golang" { print $2; exit }' "$GO_VERSION_FILE")"
+              ;;
+            *)
+              go_version="$(awk 'NF && $1 !~ /^#/ { print $1; exit }' "$GO_VERSION_FILE")"
+              ;;
+          esac
+          if [[ "$go_version" =~ ^([0-9]+)\.([0-9]+)(\.[0-9]+)?$ ]]; then
+            go_minor="${BASH_REMATCH[1]}.${BASH_REMATCH[2]}"
+          else
+            echo "unable to read a Go major.minor version from $GO_VERSION_FILE" >&2
+            exit 1
+          fi
+          echo "version=${go_minor}.x" >>"$GITHUB_OUTPUT"
+          printf 'using newest available Go patch in %s\n' "${go_minor}.x"
+
       - if: ${{ inputs.ci-image-dir == '' }}
         uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
-          go-version-file: ${{ inputs.go-version-file }}
+          go-version: ${{ steps.go_version.outputs.version }}
+          check-latest: true
           # A pull request must not seed a cache that main later restores.
           cache: false
 

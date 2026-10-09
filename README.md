@@ -323,7 +323,7 @@ requires.
 
 | Input | Default | Purpose |
 | --- | --- | --- |
-| `go-version-file` | `go.mod` | Go version for `actions/setup-go` |
+| `go-version-file` | `go.mod` | Go minor version for `actions/setup-go`; runner mode selects the newest patch in that minor |
 | `runner` | `vars.CI_RUNNER`, then `ubuntu-24.04` | Gate runner. The nightly uses `vars.CI_NIGHTLY_RUNNER` |
 | `ci-image-dir` | empty | Directory with the Dockerfile of an execution image, for example `ci` |
 | `golangci-lint-version` | `v2.13.2` | Installed when no image is used |
