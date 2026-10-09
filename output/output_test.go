@@ -117,8 +117,8 @@ func TestPrintTable(t *testing.T) {
 		{"alice", "30"},
 		{"bob", "25"},
 	})
-	if buf.Len() == 0 {
-		t.Error("expected table output")
+	if buf.String() != "NAME   AGE\nalice  30\nbob    25\n" {
+		t.Errorf("unexpected table output: %q", buf.String())
 	}
 }
 
