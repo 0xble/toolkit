@@ -98,7 +98,7 @@ jobs:
           case "$(basename "$GO_VERSION_FILE")" in
             go.mod|go.work)
               go_version="$(awk '
-                $1 == "toolchain" { toolchain_version = $2 }
+                $1 == "toolchain" && $2 != "default" { toolchain_version = $2 }
                 $1 == "go" { go_version = $2 }
                 END {
                   if (toolchain_version != "") {
@@ -119,17 +119,23 @@ jobs:
           esac
           if [[ "$go_version" =~ ^([0-9]+)\.([0-9]+)(\.[0-9]+)?$ ]]; then
             go_minor="${BASH_REMATCH[1]}.${BASH_REMATCH[2]}"
+            echo "version=${go_minor}.x" >>"$GITHUB_OUTPUT"
+            printf 'using newest available Go patch in %s\n' "${go_minor}.x"
+          elif [[ "$go_version" =~ ^[0-9]+\.[0-9]+ ]]; then
+            # A prerelease such as 1.26rc1 has no patch line to float; let
+            # setup-go read the exact version from the file as before.
+            echo "version=" >>"$GITHUB_OUTPUT"
+            printf 'using the exact Go version %s from %s\n' "$go_version" "$GO_VERSION_FILE"
           else
-            echo "unable to read a Go major.minor version from $GO_VERSION_FILE (found '${go_version}'; expected N.N or N.N.N, prerelease toolchains are not supported)" >&2
+            echo "unable to read a Go version from $GO_VERSION_FILE (found '${go_version}')" >&2
             exit 1
           fi
-          echo "version=${go_minor}.x" >>"$GITHUB_OUTPUT"
-          printf 'using newest available Go patch in %s\n' "${go_minor}.x"
 
       - if: ${{ inputs.ci-image-dir == '' }}
         uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
           go-version: ${{ steps.go_version.outputs.version }}
+          go-version-file: ${{ steps.go_version.outputs.version == '' && inputs.go-version-file || '' }}
           check-latest: true
           cache: false
 
