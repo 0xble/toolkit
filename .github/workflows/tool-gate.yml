@@ -177,7 +177,7 @@ jobs:
           if [[ "$go_version" =~ ^([0-9]+)\.([0-9]+)(\.[0-9]+)?$ ]]; then
             go_minor="${BASH_REMATCH[1]}.${BASH_REMATCH[2]}"
           else
-            echo "unable to read a Go major.minor version from $GO_VERSION_FILE" >&2
+            echo "unable to read a Go major.minor version from $GO_VERSION_FILE (found '${go_version}'; expected N.N or N.N.N, prerelease toolchains are not supported)" >&2
             exit 1
           fi
           echo "version=${go_minor}.x" >>"$GITHUB_OUTPUT"
