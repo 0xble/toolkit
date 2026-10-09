@@ -16,7 +16,8 @@ on:
         default: go.mod
       runner:
         description: >-
-          Runner label. Empty uses vars.CI_NIGHTLY_RUNNER, then ubuntu-24.04.
+          Runner label. Empty uses vars.CI_NIGHTLY_RUNNER, then vars.CI_RUNNER,
+          then ubuntu-24.04.
         type: string
         default: ""
       apt-packages:
@@ -50,7 +51,7 @@ permissions:
 jobs:
   nightly:
     name: nightly
-    runs-on: ${{ inputs.runner || vars.CI_NIGHTLY_RUNNER || 'ubuntu-24.04' }}
+    runs-on: ${{ inputs.runner || vars.CI_NIGHTLY_RUNNER || vars.CI_RUNNER || 'ubuntu-24.04' }}
     timeout-minutes: 45
     steps:
       - name: Resolve the exact SHA
