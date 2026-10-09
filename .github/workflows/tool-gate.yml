@@ -193,7 +193,9 @@ jobs:
         with:
           go-version: ${{ steps.go_version.outputs.version }}
           go-version-file: ${{ steps.go_version.outputs.version == '' && inputs.go-version-file || '' }}
-          check-latest: true
+          # A prerelease keeps the base behaviour: setup-go reads the file itself,
+          # without check-latest, exactly as before the patch-resolution change.
+          check-latest: ${{ steps.go_version.outputs.version != '' }}
           # A pull request must not seed a cache that main later restores.
           cache: false
 

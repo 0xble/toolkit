@@ -23,8 +23,8 @@ for workflow in .github/workflows/tool-gate.yml .github/workflows/tool-nightly.y
     printf '%s does not pass the resolved version to setup-go\n' "$workflow" >&2
     exit 1
   }
-  grep -Fq 'check-latest: true' "$file" || {
-    printf '%s does not request the latest patch release\n' "$workflow" >&2
+  grep -Fq "check-latest: \${{ steps.go_version.outputs.version != '' }}" "$file" || {
+    printf '%s does not request the latest patch only for stable versions\n' "$workflow" >&2
     exit 1
   }
   if grep -Fq "go-version-file: \${{ inputs.go-version-file }}" "$file"; then
