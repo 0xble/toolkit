@@ -13,6 +13,8 @@ func TestPromptConfirmation(t *testing.T) {
 	}{
 		{name: "accepts y", input: "y\n", want: true},
 		{name: "accepts yes", input: "yes\n", want: true},
+		{name: "accepts mixed-case yes", input: "YeS\n", want: true},
+		{name: "accepts padded yes", input: " \tyes \t\n", want: true},
 		{name: "rejects no", input: "n\n", want: false},
 		{name: "rejects EOF", input: "", want: false},
 	} {
@@ -20,6 +22,9 @@ func TestPromptConfirmation(t *testing.T) {
 			var out bytes.Buffer
 			if got := prompt(bytes.NewBufferString(tc.input), &out, "Apply item? This is destructive."); got != tc.want {
 				t.Errorf("prompt(%q) = %v, want %v", tc.input, got, tc.want)
+			}
+			if got, want := out.String(), "Apply item? This is destructive. [y/N] "; got != want {
+				t.Errorf("prompt output = %q, want %q", got, want)
 			}
 		})
 	}

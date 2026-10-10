@@ -237,6 +237,29 @@ func TestCallEnforcesApplyAndConfirm(t *testing.T) {
 	if out, err := d.CallJSON(ctx, op.Request{}, json.RawMessage(`{"id":"x"}`), nil); err != nil || out.(res).Applied {
 		t.Errorf("default authorizer preview: %+v, %v", out, err)
 	}
+
+	n, authorized = 0, 0
+	deny := op.AuthorizerFunc(func(context.Context, *op.Entry, op.Request) error {
+		authorized++
+		return &op.Error{Kind: op.KindAuth, Code: "custom_denied", Message: "denied by custom authorizer"}
+	})
+	out, err = d.CallJSON(ctx, op.Request{}, json.RawMessage(`{"id":"x","apply":true,"confirm":true}`), deny)
+	if oe := op.AsError(err, op.KindError); out != nil || oe == nil || oe.Kind != op.KindAuth || oe.Code != "custom_denied" || oe.Message != "denied by custom authorizer" || authorized != 1 || n != 0 {
+		t.Errorf("custom authorizer denial: out=%+v err=%v, authorized %d, handler calls %d", out, err, authorized, n)
+	}
+
+	n, authorized = 0, 0
+	allow := op.AuthorizerFunc(func(context.Context, *op.Entry, op.Request) error {
+		authorized++
+		if n != 0 {
+			t.Errorf("custom authorizer ran after %d handler calls", n)
+		}
+		return nil
+	})
+	out, err = d.CallJSON(ctx, op.Request{}, json.RawMessage(`{"id":"x","apply":true,"confirm":true}`), allow)
+	if got, ok := out.(res); err != nil || !ok || !got.Applied || authorized != 1 || n != 1 {
+		t.Errorf("custom authorizer apply: out=%+v err=%v, authorized %d, handler calls %d", out, err, authorized, n)
+	}
 }
 
 func TestKindsMapToEverySurface(t *testing.T) {

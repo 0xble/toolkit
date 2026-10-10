@@ -2,6 +2,7 @@ package output
 
 import (
 	"bytes"
+	"reflect"
 	"testing"
 )
 
@@ -25,8 +26,8 @@ func TestEncodeJSON(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if buf.Len() == 0 {
-		t.Error("expected non-empty output")
+	if got, want := buf.String(), "{\n  \"key\": \"val\"\n}\n"; got != want {
+		t.Errorf("JSON output = %q, want %q", got, want)
 	}
 }
 
@@ -61,11 +62,9 @@ func TestFilterFields_Array(t *testing.T) {
 	if !ok {
 		t.Fatal("expected slice")
 	}
-	if len(arr) != 2 {
-		t.Errorf("expected 2 items, got %d", len(arr))
-	}
-	if arr[0]["x"] != float64(10) {
-		t.Errorf("expected x=10, got %v", arr[0]["x"])
+	want := []map[string]any{{"x": float64(10)}, {"x": float64(30)}}
+	if !reflect.DeepEqual(arr, want) {
+		t.Errorf("filtered array = %#v, want %#v", arr, want)
 	}
 }
 
@@ -75,8 +74,8 @@ func TestFilterFields_Empty(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if out == nil {
-		t.Error("expected non-nil")
+	if want := map[string]any{"a": 1}; !reflect.DeepEqual(out, want) {
+		t.Errorf("empty field selection = %#v, want original value %#v", out, want)
 	}
 }
 
@@ -88,8 +87,8 @@ func TestCLIError_Error(t *testing.T) {
 		ExitCode:    ExitAuth,
 	}
 	s := e.Error()
-	if s == "" {
-		t.Error("expected non-empty error string")
+	if want := "API key invalid\n  hint: check your .env file"; s != want {
+		t.Errorf("error string = %q, want %q", s, want)
 	}
 }
 
@@ -97,8 +96,8 @@ func TestWriteError_JSON(t *testing.T) {
 	var buf bytes.Buffer
 	e := Err("test", "test error")
 	WriteError(&buf, FormatJSON, e)
-	if buf.Len() == 0 {
-		t.Error("expected JSON error output")
+	if got, want := buf.String(), `{"error":{"code":"test","message":"test error","exit_code":1}}`+"\n"; got != want {
+		t.Errorf("JSON error output = %q, want %q", got, want)
 	}
 }
 
@@ -106,8 +105,8 @@ func TestWriteError_Plain(t *testing.T) {
 	var buf bytes.Buffer
 	e := Err("test", "test error")
 	WriteError(&buf, FormatTable, e)
-	if buf.Len() == 0 {
-		t.Error("expected plain error output")
+	if got, want := buf.String(), "error: test error\n"; got != want {
+		t.Errorf("plain error output = %q, want %q", got, want)
 	}
 }
 
