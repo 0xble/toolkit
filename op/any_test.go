@@ -70,16 +70,6 @@ func TestAnyJSONOutputSchemas(t *testing.T) {
 	toolkittest.CheckMetadata(t, b)
 }
 
-// TestCourtlistenerRepro is the reproduction from 0xble/courtlistener#1:
-// an any output returning an array failed toolkit.metadata.v1.
-func TestCourtlistenerRepro(t *testing.T) {
-	reg := op.New("repro", "dev")
-	op.Add(reg, op.Op[struct{}, any]{Name: "doc", Effect: op.Read,
-		Handler: func(context.Context, op.Request, struct{}) (any, error) { return []any{1, "x"}, nil }})
-	b, _ := json.Marshal(reg.Metadata())
-	toolkittest.CheckMetadata(t, b)
-}
-
 func TestRenderAcceptsANilAnyOutput(t *testing.T) {
 	r := op.New("t", "v")
 	op.Add(r, op.Op[struct{}, any]{Name: "doc", Effect: op.Read,
