@@ -44,15 +44,27 @@ type hand struct {
 	Name string `arg:""`
 }
 
+type observed struct {
+	listInputs []listIn
+	applied    int
+}
+
 func (h *hand) Run(c *cli.Context) error {
 	_, err := fmt.Fprintf(c.Stdout, "hello %s json=%v ops=%d\n", h.Name, c.JSON, len(c.Registry.Entries()))
 	return err
 }
 
 func registry(fail error) *op.Registry {
+	return registryObserved(fail, nil)
+}
+
+func registryObserved(fail error, obs *observed) *op.Registry {
 	r := op.New("t", "v1.2.3")
 	op.Add(r, op.Op[listIn, result]{Name: "items.list", Summary: "List", Effect: op.Read,
 		Handler: func(_ context.Context, req op.Request, in listIn) (result, error) {
+			if obs != nil {
+				obs.listInputs = append(obs.listInputs, in)
+			}
 			return result{In: in, Applied: req.Apply}, fail
 		},
 		Render: func(w io.Writer, r result) error {
@@ -63,6 +75,9 @@ func registry(fail error) *op.Registry {
 	for _, eff := range []op.Effect{op.Write, op.Destructive} {
 		op.Add(r, op.Op[itemIn, result]{Name: "item." + string(eff), CLI: "item <id> " + string(eff), Effect: eff,
 			Handler: func(_ context.Context, req op.Request, in itemIn) (result, error) {
+				if obs != nil && req.Apply {
+					obs.applied++
+				}
 				return result{In: in, Applied: req.Apply}, nil
 			},
 		})
@@ -81,23 +96,37 @@ func run(t *testing.T, r *op.Registry, args ...string) (int, string, string) {
 }
 
 func TestRootFlagsBindIntoInputs(t *testing.T) {
-	r := registry(nil)
-	for _, args := range [][]string{
+	var obs observed
+	r := registryObserved(nil, &obs)
+	for i, args := range [][]string{
 		{"--json", "--limit", "5", "items", "list"},
 		{"--json", "items", "list", "--limit", "5"},
 		{"items", "--limit=5", "list", "--agent"},
 	} {
-		code, out, stderr := run(t, r, args...)
-		if code != 0 || !strings.Contains(out, `"limit": 5`) {
-			t.Errorf("%v: exit %d, %s %s", args, code, out, stderr)
+		code, _, stderr := run(t, r, args...)
+		if code != 0 {
+			t.Fatalf("%v: exit %d, %s", args, code, stderr)
+		}
+		if len(obs.listInputs) != i+1 {
+			t.Fatalf("%v: handler calls %d, want %d", args, len(obs.listInputs), i+1)
+		}
+		got := obs.listInputs[i]
+		if got.Limit != 5 {
+			t.Errorf("%v: handler saw limit %d, want 5", args, got.Limit)
 		}
 	}
-	if _, out, _ := run(t, r, "--json", "items", "list"); !strings.Contains(out, `"limit": 20`) {
-		t.Errorf("without the flag the input default applies: %s", out)
+	if code, _, stderr := run(t, r, "--json", "items", "list"); code != 0 {
+		t.Fatalf("without the flag: exit %d %s", code, stderr)
+	}
+	if got := obs.listInputs[len(obs.listInputs)-1]; got.Limit != 20 {
+		t.Errorf("without the flag the input default applies: %+v", got)
 	}
 	t.Setenv("CLITEST_ACCOUNT", "acme")
-	if _, out, _ := run(t, r, "--json", "items", "list"); !strings.Contains(out, `"account": "acme"`) {
-		t.Errorf("a root flag's env var binds too: %s", out)
+	if code, _, stderr := run(t, r, "--json", "items", "list"); code != 0 {
+		t.Fatalf("with the env var: exit %d %s", code, stderr)
+	}
+	if got := obs.listInputs[len(obs.listInputs)-1]; got.Account != "acme" {
+		t.Errorf("a root flag's env var binds too: %+v", got)
 	}
 }
 
@@ -116,16 +145,26 @@ func TestPlaceholdersAndApply(t *testing.T) {
 }
 
 func TestDestructiveNeedsYes(t *testing.T) {
-	r := registry(nil)
+	var obs observed
+	r := registryObserved(nil, &obs)
 	code, _, stderr := run(t, r, "--agent", "item", "abc", "destructive", "x", "--apply")
 	if code != output.ExitUsage || !strings.Contains(stderr, `"confirmation_required"`) {
 		t.Errorf("without --yes (stdin is not a terminal, so no prompt): %d %s", code, stderr)
 	}
+	if obs.applied != 0 {
+		t.Errorf("unconfirmed destructive operation applied %d times", obs.applied)
+	}
 	if _, out, _ := run(t, r, "--agent", "item", "abc", "destructive", "x"); !strings.Contains(out, `"applied": false`) {
 		t.Errorf("a preview never needs --yes: %s", out)
 	}
+	if obs.applied != 0 {
+		t.Errorf("preview changed state: %d applied calls", obs.applied)
+	}
 	if _, out, _ := run(t, r, "--agent", "-y", "item", "abc", "destructive", "x", "--apply"); !strings.Contains(out, `"applied": true`) {
 		t.Errorf("--yes --apply: %s", out)
+	}
+	if obs.applied != 1 {
+		t.Errorf("confirmed destructive operation applied %d times, want 1", obs.applied)
 	}
 }
 
