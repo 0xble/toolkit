@@ -324,7 +324,8 @@ requires.
 | Input | Default | Purpose |
 | --- | --- | --- |
 | `go-version-file` | `go.mod` | Go minor version for `actions/setup-go`; runner mode selects the newest patch in that minor |
-| `runner` | `vars.CI_RUNNER`, then `ubuntu-24.04` | Gate runner. The nightly uses `vars.CI_NIGHTLY_RUNNER` |
+| `runner` | `vars.CI_RUNNER`, then `ubuntu-24.04` | Gate runner. The nightly uses `vars.CI_NIGHTLY_RUNNER`, then `vars.CI_RUNNER` |
+| `apt-packages` | empty | Space-separated Ubuntu APT packages installed before runner-mode `./bin/ci`; ignored with `ci-image-dir` |
 | `ci-image-dir` | empty | Directory with the Dockerfile of an execution image, for example `ci` |
 | `golangci-lint-version` | `v2.13.2` | Installed when no image is used |
 | `govulncheck-version` | `v1.7.0` | Nightly only, pinned for Go 1.25.x when no image is used; checked against the selected Go toolchain |

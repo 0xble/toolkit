@@ -24,6 +24,12 @@ on:
           ubuntu-24.04.
         type: string
         default: ""
+      apt-packages:
+        description: >-
+          Space-separated Ubuntu APT packages to install before the runner-mode
+          gate. Ignored when ci-image-dir is set.
+        type: string
+        default: ""
       ci-image-dir:
         description: >-
           Directory holding the Dockerfile of a reviewed execution image, for
@@ -205,6 +211,17 @@ jobs:
           version: ${{ inputs.golangci-lint-version }}
           install-only: true
           skip-cache: true
+
+      - name: Install APT packages
+        if: ${{ inputs.ci-image-dir == '' && inputs.apt-packages != '' }}
+        env:
+          APT_PACKAGES: ${{ inputs.apt-packages }}
+        run: |
+          set -euo pipefail
+          read -r -a packages <<<"$APT_PACKAGES"
+          ((${#packages[@]} > 0))
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends -- "${packages[@]}"
 
       - name: Run ./bin/ci gate on the exact SHA
         if: ${{ inputs.ci-image-dir == '' }}

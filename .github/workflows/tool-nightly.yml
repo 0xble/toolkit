@@ -16,7 +16,14 @@ on:
         default: go.mod
       runner:
         description: >-
-          Runner label. Empty uses vars.CI_NIGHTLY_RUNNER, then ubuntu-24.04.
+          Runner label. Empty uses vars.CI_NIGHTLY_RUNNER, then vars.CI_RUNNER,
+          then ubuntu-24.04.
+        type: string
+        default: ""
+      apt-packages:
+        description: >-
+          Space-separated Ubuntu APT packages to install before the runner-mode
+          nightly. Ignored when ci-image-dir is set.
         type: string
         default: ""
       ci-image-dir:
@@ -44,7 +51,7 @@ permissions:
 jobs:
   nightly:
     name: nightly
-    runs-on: ${{ inputs.runner || vars.CI_NIGHTLY_RUNNER || 'ubuntu-24.04' }}
+    runs-on: ${{ inputs.runner || vars.CI_NIGHTLY_RUNNER || vars.CI_RUNNER || 'ubuntu-24.04' }}
     timeout-minutes: 45
     steps:
       - name: Resolve the exact SHA
@@ -185,6 +192,17 @@ jobs:
           GOBIN="$bin" GOWORK=off GOTOOLCHAIN=local GOFLAGS='' \
             go install "golang.org/x/vuln/cmd/govulncheck@$VULN_VERSION"
           echo "$bin" >>"$GITHUB_PATH"
+
+      - name: Install APT packages
+        if: ${{ inputs.ci-image-dir == '' && inputs.apt-packages != '' }}
+        env:
+          APT_PACKAGES: ${{ inputs.apt-packages }}
+        run: |
+          set -euo pipefail
+          read -r -a packages <<<"$APT_PACKAGES"
+          ((${#packages[@]} > 0))
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends -- "${packages[@]}"
 
       - name: Run ./bin/ci nightly on the exact SHA
         if: ${{ inputs.ci-image-dir == '' }}

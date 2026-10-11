@@ -80,6 +80,7 @@ lane_templates() {
   log "lane templates"
   bash -n templates/tool/bin/ci
   [ -x templates/tool/bin/ci ] || { echo "templates/tool/bin/ci must be executable" >&2; return 1; }
+  bash ci/check-apt-packages-input.sh
 }
 
 lane_test_short() {
