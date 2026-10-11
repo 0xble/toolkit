@@ -321,8 +321,24 @@ full gate. GitHub reports a called workflow's jobs as `gate / qualification`,
 so the caller keeps its own `qualification` job, the one branch protection
 requires.
 
+To pay for one aggregation job instead of two, set `caller-qualification: true`
+and fold the lane check into the caller's existing required `qualification`.
+It must run with `if: always()` and require **both** `needs.gate.result` and
+`needs.gate.outputs.lane-result` to equal `success`, as toolkit's own
+`.github/workflows/gate.yml` does. A reusable workflow with only skipped jobs
+can report success, so checking its result alone is unsafe. Failed, cancelled,
+skipped or missing lane results still block merging. The exact-SHA gate and
+its draft/queue eligibility are unchanged; no test lane moves or disappears.
+
+The input defaults to `false`, retaining the internal qualification and its
+result semantics for existing callers. Opt in only after updating the caller's
+aggregate, and only when branch protection does not require the prefixed
+`gate / qualification` context. The plain `qualification` stays hosted on
+`ubuntu-slim`; Namespace outage and fallback semantics do not change.
+
 | Input | Default | Purpose |
 | --- | --- | --- |
+| `caller-qualification` | `false` | Fold the lane check into the caller's required aggregate, using the `lane-result` output |
 | `go-version-file` | `go.mod` | Go minor version for `actions/setup-go`; runner mode selects the newest patch in that minor |
 | `runner` | `vars.CI_RUNNER`, then `ubuntu-24.04` | Gate runner. The nightly uses `vars.CI_NIGHTLY_RUNNER`, then `vars.CI_RUNNER` |
 | `apt-packages` | empty | Space-separated Ubuntu APT packages installed before runner-mode `./bin/ci`; ignored with `ci-image-dir` |
