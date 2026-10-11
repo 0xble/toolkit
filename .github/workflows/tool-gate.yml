@@ -6,12 +6,20 @@ name: tool-gate
 #
 # Check names from a called workflow are prefixed with the caller's job
 # ("gate / qualification"), so the caller keeps a top-level `qualification`
-# job that requires this workflow's result. The draft and lane policy lives
-# here, in this workflow's own qualification job.
+# job that requires this workflow's result. Callers can fold the lane-result
+# check into that required job with caller-qualification and the lane-result
+# output; older callers keep this workflow's qualification unchanged.
 
 on:
   workflow_call:
     inputs:
+      caller-qualification:
+        description: >-
+          Fold aggregation into the caller's required qualification job. That
+          job must require both the reusable workflow and lane-result output
+          to be success. False preserves the internal qualification job.
+        type: boolean
+        default: false
       go-version-file:
         description: >-
           File whose Go minor version actions/setup-go uses when no CI image is
@@ -42,6 +50,12 @@ on:
         description: golangci-lint release installed when no CI image is used.
         type: string
         default: v2.13.2
+    outputs:
+      lane-result:
+        description: >-
+          Result of the exact-SHA gate lane. Caller qualification must accept
+          only success, never a skipped, cancelled, failed or missing result.
+        value: ${{ jobs.gate.outputs.lane-result }}
 
 permissions:
   contents: read
@@ -58,6 +72,10 @@ jobs:
       startsWith(github.event.pull_request.head.ref, 'mergify/merge-queue/')) }}
     runs-on: ${{ inputs.runner || vars.CI_RUNNER || 'ubuntu-24.04' }}
     timeout-minutes: 30
+    outputs:
+      # Skipped lanes emit nothing. Failed/cancelled workflows also fail the
+      # caller's workflow-result check, including failures in post actions.
+      lane-result: ${{ job.status }}
     steps:
       - name: Resolve the exact candidate SHA
         id: candidate
@@ -417,7 +435,9 @@ jobs:
     # still reports when the lane runner is down.
     runs-on: ubuntu-slim
     needs: [gate]
-    if: always()
+    # Opted-in callers run this same lane-result check in their always-live
+    # required aggregate, avoiding a second one-minute hosted job minimum.
+    if: ${{ always() && !inputs.caller-qualification }}
     timeout-minutes: 5
     steps:
       # A skipped, cancelled or failed blocking lane never qualifies.
