@@ -264,7 +264,7 @@ func TestCallEnforcesApplyAndConfirm(t *testing.T) {
 
 func TestKindsMapToEverySurface(t *testing.T) {
 	want := map[op.Kind][2]int{
-		op.KindError: {1, 500}, op.KindUsage: {2, 400}, op.KindNotFound: {3, 404}, op.KindConflict: {4, 409},
+		op.KindError: {1, 500}, op.KindUsage: {2, 400}, op.KindNotFound: {3, 404}, op.KindConflict: {4, 409}, op.KindDuplicateSend: {4, 409},
 		op.KindAuth: {5, 403}, op.KindRate: {6, 429}, op.KindTimeout: {7, 504}, op.KindStaleIndex: {8, 503},
 		op.KindModelUnavail: {9, 503}, op.KindPartial: {10, 207}, "unknown": {1, 500},
 	}

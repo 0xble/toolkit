@@ -23,6 +23,7 @@ op.Add(reg, op.Op[In, Out]{...})
 | `api` | HTTP routes and the OpenAPI document |
 | `mcp` | MCP tools over stdio and streamable HTTP |
 | `output` | JSON and table output, error envelope and exit codes |
+| `sendguard` | Process-safe duplicate-send claims with local and remote history checks |
 | `toolkit` | `toolkit.Main`, plus the built-in `serve`, `mcp` and `metadata` commands |
 | `toolkittest` | Conformance checks a tool runs from its own tests |
 
@@ -148,6 +149,7 @@ field is declared once.
 | `usage` | 2 | 400 |
 | `not_found` | 3 | 404 |
 | `conflict` | 4 | 409 |
+| `duplicate_send` | 4 | 409 |
 | `auth` | 5 | 403 |
 | `rate` | 6 | 429 |
 | `timeout` | 7 | 504 |

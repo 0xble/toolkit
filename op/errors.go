@@ -14,32 +14,34 @@ import (
 type Kind string
 
 const (
-	KindError        Kind = "error"
-	KindUsage        Kind = "usage"
-	KindNotFound     Kind = "not_found"
-	KindConflict     Kind = "conflict"
-	KindAuth         Kind = "auth"
-	KindRate         Kind = "rate"
-	KindTimeout      Kind = "timeout"
-	KindStaleIndex   Kind = "stale_index"
-	KindModelUnavail Kind = "model_unavailable"
-	KindPartial      Kind = "partial"
+	KindError         Kind = "error"
+	KindUsage         Kind = "usage"
+	KindNotFound      Kind = "not_found"
+	KindConflict      Kind = "conflict"
+	KindDuplicateSend Kind = "duplicate_send"
+	KindAuth          Kind = "auth"
+	KindRate          Kind = "rate"
+	KindTimeout       Kind = "timeout"
+	KindStaleIndex    Kind = "stale_index"
+	KindModelUnavail  Kind = "model_unavailable"
+	KindPartial       Kind = "partial"
 )
 
 var kinds = map[Kind]struct {
 	exit   int
 	status int
 }{
-	KindError:        {output.ExitError, http.StatusInternalServerError},
-	KindUsage:        {output.ExitUsage, http.StatusBadRequest},
-	KindNotFound:     {output.ExitNotFound, http.StatusNotFound},
-	KindConflict:     {output.ExitConflict, http.StatusConflict},
-	KindAuth:         {output.ExitAuth, http.StatusForbidden},
-	KindRate:         {output.ExitRate, http.StatusTooManyRequests},
-	KindTimeout:      {output.ExitTimeout, http.StatusGatewayTimeout},
-	KindStaleIndex:   {output.ExitStaleIndex, http.StatusServiceUnavailable},
-	KindModelUnavail: {output.ExitModelUnavail, http.StatusServiceUnavailable},
-	KindPartial:      {output.ExitPartial, http.StatusMultiStatus},
+	KindError:         {output.ExitError, http.StatusInternalServerError},
+	KindUsage:         {output.ExitUsage, http.StatusBadRequest},
+	KindNotFound:      {output.ExitNotFound, http.StatusNotFound},
+	KindConflict:      {output.ExitConflict, http.StatusConflict},
+	KindDuplicateSend: {output.ExitConflict, http.StatusConflict},
+	KindAuth:          {output.ExitAuth, http.StatusForbidden},
+	KindRate:          {output.ExitRate, http.StatusTooManyRequests},
+	KindTimeout:       {output.ExitTimeout, http.StatusGatewayTimeout},
+	KindStaleIndex:    {output.ExitStaleIndex, http.StatusServiceUnavailable},
+	KindModelUnavail:  {output.ExitModelUnavail, http.StatusServiceUnavailable},
+	KindPartial:       {output.ExitPartial, http.StatusMultiStatus},
 }
 
 // ExitCode is the CLI exit code for the kind. Unknown kinds map to 1.
@@ -112,7 +114,11 @@ func AsError(err error, fallback Kind) *Error {
 	}
 	var ce *output.CLIError
 	if errors.As(err, &ce) {
-		return &Error{Kind: kindForExit(ce.ExitCode), Code: ce.Code, Message: ce.Message, Suggestions: ce.Suggestions}
+		kind := kindForExit(ce.ExitCode)
+		if ce.ExitCode == output.ExitConflict && ce.Code == string(KindDuplicateSend) {
+			kind = KindDuplicateSend
+		}
+		return &Error{Kind: kind, Code: ce.Code, Message: ce.Message, Suggestions: ce.Suggestions}
 	}
 	if errors.Is(err, context.DeadlineExceeded) {
 		return &Error{Kind: KindTimeout, Code: "timeout", Message: err.Error()}
@@ -126,7 +132,7 @@ func AsError(err error, fallback Kind) *Error {
 
 func kindForExit(code int) Kind {
 	for k, v := range kinds {
-		if v.exit == code {
+		if v.exit == code && k != KindDuplicateSend {
 			return k
 		}
 	}
