@@ -18,8 +18,10 @@ import (
 	"net/http"
 	"sync"
 
+	"github.com/google/jsonschema-go/jsonschema"
 	sdk "github.com/modelcontextprotocol/go-sdk/mcp"
 
+	"github.com/0xble/toolkit/internal/schemacache"
 	"github.com/0xble/toolkit/op"
 )
 
@@ -44,7 +46,10 @@ var toolCache sync.Map // *op.Entry -> *cachedTool
 func sharedTool(e *op.Entry) *sdk.Tool {
 	v, _ := toolCache.LoadOrStore(e, new(cachedTool))
 	c := v.(*cachedTool)
-	c.once.Do(func() { c.tool = Tool(e) })
+	c.once.Do(func() {
+		input, output := schemacache.Get(e)
+		c.tool = toolFromSchemas(e, input, output)
+	})
 	return c.tool
 }
 
@@ -88,18 +93,22 @@ const MetaCLIConfirmed = "toolkit/cli_confirmed"
 // including an op.Op whose Out is any or json.RawMessage, has no output
 // schema, and its result is the JSON text alone, without structured content.
 func Tool(e *op.Entry) *sdk.Tool {
+	return toolFromSchemas(e, e.InputSchema(), e.OutputSchema())
+}
+
+func toolFromSchemas(e *op.Entry, input, output *jsonschema.Schema) *sdk.Tool {
 	destructive := e.Effect == op.Destructive
 	t := &sdk.Tool{
 		Name:        e.MCPName(),
 		Description: e.Summary,
-		InputSchema: e.InputSchema(),
+		InputSchema: input,
 		Annotations: &sdk.ToolAnnotations{
 			ReadOnlyHint:    e.Effect == op.Read,
 			DestructiveHint: &destructive,
 		},
 	}
-	if out := e.OutputSchema(); out.Type == "object" {
-		t.OutputSchema = out
+	if output.Type == "object" {
+		t.OutputSchema = output
 	}
 	if e.CLIImmediate {
 		t.Meta = sdk.Meta{MetaCLIImmediate: true}

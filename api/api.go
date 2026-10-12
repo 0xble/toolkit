@@ -45,7 +45,7 @@ func cachedJSON(reg *op.Registry) []byte {
 	c := v.(*cachedOpenAPI)
 	c.once.Do(func() {
 		var err error
-		c.json, err = json.Marshal(buildOpenAPI(reg))
+		c.json, err = json.Marshal(buildOpenAPI(reg, true))
 		if err != nil {
 			panic(fmt.Sprintf("encode OpenAPI document: %v", err))
 		}

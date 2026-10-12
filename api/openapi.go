@@ -3,6 +3,7 @@ package api
 import (
 	"github.com/google/jsonschema-go/jsonschema"
 
+	"github.com/0xble/toolkit/internal/schemacache"
 	"github.com/0xble/toolkit/op"
 )
 
@@ -13,10 +14,11 @@ import (
 // has "x-cli-immediate": true, and one with CLIConfirmed
 // "x-cli-confirmed": true; the HTTP route still needs apply, and confirm
 // when destructive.
+//
 // OpenAPI returns a fresh OpenAPI 3.1 document for reg.
-func OpenAPI(reg *op.Registry) map[string]any { return buildOpenAPI(reg) }
+func OpenAPI(reg *op.Registry) map[string]any { return buildOpenAPI(reg, false) }
 
-func buildOpenAPI(reg *op.Registry) map[string]any {
+func buildOpenAPI(reg *op.Registry, shared bool) map[string]any {
 	errRef := map[string]any{"$ref": "#/components/responses/Error"}
 	paths := map[string]any{
 		"/ops": map[string]any{"get": map[string]any{
@@ -29,14 +31,20 @@ func buildOpenAPI(reg *op.Registry) map[string]any {
 		}},
 	}
 	for _, e := range reg.Entries() {
+		var input, output *jsonschema.Schema
+		if shared {
+			input, output = schemacache.Get(e)
+		} else {
+			input, output = e.InputSchema(), e.OutputSchema()
+		}
 		post := map[string]any{
 			"operationId": e.MCPName(),
 			"summary":     e.Summary,
 			"x-effect":    e.Effect,
 			"x-cli":       e.CLI(),
-			"requestBody": map[string]any{"required": true, "content": jsonContent(e.InputSchema())},
+			"requestBody": map[string]any{"required": true, "content": jsonContent(input)},
 			"responses": map[string]any{
-				"200":     map[string]any{"description": "Operation output", "content": jsonContent(e.OutputSchema())},
+				"200":     map[string]any{"description": "Operation output", "content": jsonContent(output)},
 				"default": errRef,
 			},
 		}
