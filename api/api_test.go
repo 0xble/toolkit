@@ -75,6 +75,18 @@ func TestBadBodies(t *testing.T) {
 	}
 }
 
+func TestBodyLimitAcceptsExactMaximum(t *testing.T) {
+	auth := op.AuthorizerFunc(func(context.Context, *op.Entry, op.Request) error { return nil })
+	h := api.Handler(registry(), api.Options{Authorizer: auth})
+	body := `{"name":"` + strings.Repeat("a", (1<<20)-len(`{"name":"`)-len(`"}`)) + `"}`
+	if len(body) != 1<<20 {
+		t.Fatalf("body length = %d, want %d", len(body), 1<<20)
+	}
+	if code, got := call(t, h, body); code != 200 || strings.TrimSpace(got) != `{"applied":false}` {
+		t.Errorf("exact maximum body: %d %.200s; want 200 applied=false", code, got)
+	}
+}
+
 func TestOpenAPIMatchesRegistry(t *testing.T) {
 	r := registry()
 	w := httptest.NewRecorder()
