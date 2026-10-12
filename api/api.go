@@ -18,7 +18,6 @@ import (
 	"io"
 	"net/http"
 	"strconv"
-	"sync"
 
 	"github.com/0xble/toolkit/op"
 )
@@ -33,24 +32,14 @@ type Options struct {
 	Authorizer op.Authorizer
 }
 
-type cachedOpenAPI struct {
-	once sync.Once
-	json []byte
-}
-
-var openAPICache sync.Map // *op.Registry -> *cachedOpenAPI
-
-func cachedJSON(reg *op.Registry) []byte {
-	v, _ := openAPICache.LoadOrStore(reg, new(cachedOpenAPI))
-	c := v.(*cachedOpenAPI)
-	c.once.Do(func() {
-		var err error
-		c.json, err = json.Marshal(buildOpenAPI(reg, true))
-		if err != nil {
-			panic(fmt.Sprintf("encode OpenAPI document: %v", err))
-		}
-	})
-	return c.json
+// currentJSON encodes the document from the registry's current entries. Each
+// entry's schema JSON is cached, so this marshals metadata, not schemas.
+func currentJSON(reg *op.Registry) []byte {
+	b, err := json.Marshal(buildOpenAPI(reg, true))
+	if err != nil {
+		panic(fmt.Sprintf("encode OpenAPI document: %v", err))
+	}
+	return b
 }
 
 // Handler returns the HTTP handler for reg. Mount MCP at /mcp next to it if
@@ -64,10 +53,10 @@ func Handler(reg *op.Registry, opts Options) http.Handler {
 	mux.HandleFunc("GET /ops", func(w http.ResponseWriter, _ *http.Request) {
 		writeJSON(w, http.StatusOK, reg.Metadata())
 	})
-	// The document is built on first request: most handlers never serve it,
-	// and building it marshals every operation's schemas.
+	// The document is built on request from current registry metadata. Schema
+	// copies are cached per entry, but mutable operation metadata is fresh.
 	mux.HandleFunc("GET /openapi.json", func(w http.ResponseWriter, _ *http.Request) {
-		writeJSONBytes(w, http.StatusOK, cachedJSON(reg))
+		writeJSONBytes(w, http.StatusOK, currentJSON(reg))
 	})
 	mux.HandleFunc("POST /ops/{name}", func(w http.ResponseWriter, r *http.Request) {
 		e := reg.Lookup(r.PathValue("name"))

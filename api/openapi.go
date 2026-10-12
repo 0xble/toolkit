@@ -31,9 +31,10 @@ func buildOpenAPI(reg *op.Registry, shared bool) map[string]any {
 		}},
 	}
 	for _, e := range reg.Entries() {
-		var input, output *jsonschema.Schema
+		var input, output any
 		if shared {
-			input, output = schemacache.Get(e)
+			schemas := schemacache.Get(e)
+			input, output = schemas.JSON()
 		} else {
 			input, output = e.InputSchema(), e.OutputSchema()
 		}
