@@ -4,6 +4,8 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"net/http"
+	"net/http/httptest"
 	"reflect"
 	"testing"
 
@@ -70,7 +72,7 @@ func TestHandlerCachesOpenAPIDocumentPerRegistry(t *testing.T) {
 
 func TestHandlerConstructionDoesNotCloneSchemasPerCall(t *testing.T) {
 	r := handlerCacheRegistry()
-	_ = Handler(r, Options{}) // populate the per-registry document cache
+	_ = Handler(r, Options{})
 	allocs := testing.AllocsPerRun(20, func() { _ = Handler(r, Options{}) })
 	const maxAllocs = 500
 	if allocs > maxAllocs {
@@ -83,5 +85,27 @@ func TestHandlerConstructionDoesNotCloneSchemasPerCall(t *testing.T) {
 	}
 	if !bytes.Equal(cachedJSON(r), exportedJSON) {
 		t.Fatal("cached and exported OpenAPI documents differ")
+	}
+}
+
+// Building a handler must not build the OpenAPI document: tools build a
+// handler per request or per test, and few of them ever serve the document.
+func TestHandlerBuildsOpenAPIDocumentOnFirstRequest(t *testing.T) {
+	r := handlerCacheRegistry()
+	h := Handler(r, Options{})
+	if _, ok := openAPICache.Load(r); ok {
+		t.Fatal("Handler built the OpenAPI document before it was requested")
+	}
+	w := httptest.NewRecorder()
+	h.ServeHTTP(w, httptest.NewRequest(http.MethodGet, "/openapi.json", nil))
+	if w.Code != http.StatusOK {
+		t.Fatalf("GET /openapi.json: status %d", w.Code)
+	}
+	want, err := json.Marshal(OpenAPI(r))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(bytes.TrimSpace(w.Body.Bytes()), want) {
+		t.Fatalf("served OpenAPI document differs from OpenAPI(reg):\n%s", w.Body.Bytes())
 	}
 }

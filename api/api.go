@@ -60,13 +60,14 @@ func Handler(reg *op.Registry, opts Options) http.Handler {
 	if auth == nil {
 		auth = op.DenyWrites
 	}
-	doc := cachedJSON(reg)
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /ops", func(w http.ResponseWriter, _ *http.Request) {
 		writeJSON(w, http.StatusOK, reg.Metadata())
 	})
+	// The document is built on first request: most handlers never serve it,
+	// and building it marshals every operation's schemas.
 	mux.HandleFunc("GET /openapi.json", func(w http.ResponseWriter, _ *http.Request) {
-		writeJSONBytes(w, http.StatusOK, doc)
+		writeJSONBytes(w, http.StatusOK, cachedJSON(reg))
 	})
 	mux.HandleFunc("POST /ops/{name}", func(w http.ResponseWriter, r *http.Request) {
 		e := reg.Lookup(r.PathValue("name"))
