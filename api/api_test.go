@@ -67,11 +67,23 @@ func TestBadBodies(t *testing.T) {
 		`[1]`:                    "invalid_input",
 		`{"name":1}`:             "invalid_input",
 		`{"name":"x","extra":1}`: "invalid_input",
-		`{"name":"` + strings.Repeat("a", api.MaxBodyBytes) + `"}`: "input_too_large",
+		`{"name":"` + strings.Repeat("a", (1<<20)+1-len(`{"name":"`)-len(`"}`)) + `"}`: "input_too_large",
 	} {
 		if code, got := call(t, h, body); code != 400 || toolkittest.ErrorCode([]byte(got)) != want {
 			t.Errorf("%.40s: %d %.200s; want 400 %s", body, code, got, want)
 		}
+	}
+}
+
+func TestBodyLimitAcceptsExactMaximum(t *testing.T) {
+	auth := op.AuthorizerFunc(func(context.Context, *op.Entry, op.Request) error { return nil })
+	h := api.Handler(registry(), api.Options{Authorizer: auth})
+	body := `{"name":"` + strings.Repeat("a", (1<<20)-len(`{"name":"`)-len(`"}`)) + `"}`
+	if len(body) != 1<<20 {
+		t.Fatalf("body length = %d, want %d", len(body), 1<<20)
+	}
+	if code, got := call(t, h, body); code != 200 || strings.TrimSpace(got) != `{"applied":false}` {
+		t.Errorf("exact maximum body: %d %.200s; want 200 applied=false", code, got)
 	}
 }
 
