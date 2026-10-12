@@ -42,13 +42,15 @@ func NewServer(reg *op.Registry, auth op.Authorizer, httpReq *http.Request) *sdk
 		if !e.MCP {
 			continue
 		}
-		s.AddTool(Tool(e), func(ctx context.Context, req *sdk.CallToolRequest) (*sdk.CallToolResult, error) {
+		tool := Tool(e)
+		structured := tool.OutputSchema != nil
+		s.AddTool(tool, func(ctx context.Context, req *sdk.CallToolRequest) (*sdk.CallToolResult, error) {
 			r := op.Request{Surface: op.SurfaceMCP, HTTP: httpReq, Meta: maps.Clone(req.Params.Meta)}
 			out, err := e.CallJSON(ctx, r, req.Params.Arguments, auth)
 			if err != nil {
 				return errorResult(err), nil
 			}
-			return result(e, out)
+			return result(structured, out)
 		})
 	}
 	return s
@@ -90,14 +92,14 @@ func Tool(e *op.Entry) *sdk.Tool {
 	return t
 }
 
-func result(e *op.Entry, out any) (*sdk.CallToolResult, error) {
+func result(structured bool, out any) (*sdk.CallToolResult, error) {
 	b, err := json.Marshal(out)
 	if err != nil {
 		return errorResult(op.Errorf(op.KindError, "encode_failed", "encode output: %v", err)), nil
 	}
 	r := &sdk.CallToolResult{Content: []sdk.Content{&sdk.TextContent{Text: string(b)}}}
 	// A nil map encodes as null, which is not structured content.
-	if e.OutputSchema().Type == "object" && len(b) > 0 && b[0] == '{' {
+	if structured && len(b) > 0 && b[0] == '{' {
 		r.StructuredContent = json.RawMessage(b)
 	}
 	return r, nil
