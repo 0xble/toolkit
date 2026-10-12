@@ -67,7 +67,7 @@ func TestBadBodies(t *testing.T) {
 		`[1]`:                    "invalid_input",
 		`{"name":1}`:             "invalid_input",
 		`{"name":"x","extra":1}`: "invalid_input",
-		`{"name":"` + strings.Repeat("a", api.MaxBodyBytes) + `"}`: "input_too_large",
+		`{"name":"` + strings.Repeat("a", (1<<20)+1-len(`{"name":"`)-len(`"}`)) + `"}`: "input_too_large",
 	} {
 		if code, got := call(t, h, body); code != 400 || toolkittest.ErrorCode([]byte(got)) != want {
 			t.Errorf("%.40s: %d %.200s; want 400 %s", body, code, got, want)

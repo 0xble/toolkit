@@ -47,6 +47,10 @@ func TestFilterFields_Object(t *testing.T) {
 	if m["a"] != float64(1) {
 		t.Errorf("expected a=1, got %v", m["a"])
 	}
+	want := map[string]any{"a": float64(1), "c": float64(3)}
+	if !reflect.DeepEqual(m, want) {
+		t.Errorf("filtered object = %#v, want %#v", m, want)
+	}
 }
 
 func TestFilterFields_Array(t *testing.T) {
