@@ -13,7 +13,10 @@ import (
 // has "x-cli-immediate": true, and one with CLIConfirmed
 // "x-cli-confirmed": true; the HTTP route still needs apply, and confirm
 // when destructive.
-func OpenAPI(reg *op.Registry) map[string]any {
+// OpenAPI returns a fresh OpenAPI 3.1 document for reg.
+func OpenAPI(reg *op.Registry) map[string]any { return buildOpenAPI(reg) }
+
+func buildOpenAPI(reg *op.Registry) map[string]any {
 	errRef := map[string]any{"$ref": "#/components/responses/Error"}
 	paths := map[string]any{
 		"/ops": map[string]any{"get": map[string]any{

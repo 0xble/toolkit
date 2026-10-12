@@ -16,6 +16,7 @@ import (
 	"encoding/json"
 	"maps"
 	"net/http"
+	"sync"
 
 	sdk "github.com/modelcontextprotocol/go-sdk/mcp"
 
@@ -30,6 +31,23 @@ type Options struct {
 	Authorizer op.Authorizer
 }
 
+type cachedTool struct {
+	once sync.Once
+	tool *sdk.Tool
+}
+
+var toolCache sync.Map // *op.Entry -> *cachedTool
+
+// sharedTool builds an entry's SDK tool once. The SDK promises not to modify a
+// tool after AddTool, so the immutable schema pointers can be reused by every
+// stateless server made from this registry entry.
+func sharedTool(e *op.Entry) *sdk.Tool {
+	v, _ := toolCache.LoadOrStore(e, new(cachedTool))
+	c := v.(*cachedTool)
+	c.once.Do(func() { c.tool = Tool(e) })
+	return c.tool
+}
+
 // NewServer returns an MCP server with one tool per MCP operation. httpReq is
 // the inbound HTTP request for authorizers, or nil for local transports. A
 // nil auth means op.DenyWrites.
@@ -42,7 +60,7 @@ func NewServer(reg *op.Registry, auth op.Authorizer, httpReq *http.Request) *sdk
 		if !e.MCP {
 			continue
 		}
-		tool := Tool(e)
+		tool := sharedTool(e)
 		structured := tool.OutputSchema != nil
 		s.AddTool(tool, func(ctx context.Context, req *sdk.CallToolRequest) (*sdk.CallToolResult, error) {
 			r := op.Request{Surface: op.SurfaceMCP, HTTP: httpReq, Meta: maps.Clone(req.Params.Meta)}

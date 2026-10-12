@@ -14,9 +14,11 @@ package api
 import (
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"net/http"
 	"strconv"
+	"sync"
 
 	"github.com/0xble/toolkit/op"
 )
@@ -31,6 +33,26 @@ type Options struct {
 	Authorizer op.Authorizer
 }
 
+type cachedOpenAPI struct {
+	once sync.Once
+	json []byte
+}
+
+var openAPICache sync.Map // *op.Registry -> *cachedOpenAPI
+
+func cachedJSON(reg *op.Registry) []byte {
+	v, _ := openAPICache.LoadOrStore(reg, new(cachedOpenAPI))
+	c := v.(*cachedOpenAPI)
+	c.once.Do(func() {
+		var err error
+		c.json, err = json.Marshal(buildOpenAPI(reg))
+		if err != nil {
+			panic(fmt.Sprintf("encode OpenAPI document: %v", err))
+		}
+	})
+	return c.json
+}
+
 // Handler returns the HTTP handler for reg. Mount MCP at /mcp next to it if
 // the tool serves MCP over HTTP.
 func Handler(reg *op.Registry, opts Options) http.Handler {
@@ -38,13 +60,13 @@ func Handler(reg *op.Registry, opts Options) http.Handler {
 	if auth == nil {
 		auth = op.DenyWrites
 	}
-	doc := OpenAPI(reg)
+	doc := cachedJSON(reg)
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /ops", func(w http.ResponseWriter, _ *http.Request) {
 		writeJSON(w, http.StatusOK, reg.Metadata())
 	})
 	mux.HandleFunc("GET /openapi.json", func(w http.ResponseWriter, _ *http.Request) {
-		writeJSON(w, http.StatusOK, doc)
+		writeJSONBytes(w, http.StatusOK, doc)
 	})
 	mux.HandleFunc("POST /ops/{name}", func(w http.ResponseWriter, r *http.Request) {
 		e := reg.Lookup(r.PathValue("name"))
@@ -98,7 +120,12 @@ func writeJSON(w http.ResponseWriter, status int, v any) {
 		status = http.StatusInternalServerError
 		b, _ = json.Marshal(ErrorBody{Error: op.Errorf(op.KindError, "encode_failed", "encode response: %v", err)})
 	}
+	writeJSONBytes(w, status, b)
+}
+
+func writeJSONBytes(w http.ResponseWriter, status int, b []byte) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(status)
-	_, _ = w.Write(append(b, '\n'))
+	_, _ = w.Write(b)
+	_, _ = w.Write([]byte{'\n'})
 }
