@@ -15,6 +15,18 @@ type cacheInput struct {
 	Name   string            `json:"name"`
 	Items  []string          `json:"items,omitempty"`
 	Labels map[string]string `json:"labels,omitempty"`
+	A      string            `json:"a"`
+	B      string            `json:"b"`
+	C      string            `json:"c"`
+	D      string            `json:"d"`
+	E      string            `json:"e"`
+	F      string            `json:"f"`
+	G      string            `json:"g"`
+	H      string            `json:"h"`
+	I      string            `json:"i"`
+	J      string            `json:"j"`
+	K      string            `json:"k"`
+	L      string            `json:"l"`
 }
 
 type cacheOutput struct {
@@ -63,6 +75,16 @@ func TestSharedToolSchemaIsSafeForConcurrentServers(t *testing.T) {
 	}
 	if got := sharedTool(e); got != shared {
 		t.Fatal("cached tool was rebuilt")
+	}
+}
+
+func TestNewServerDoesNotCloneSchemasPerCall(t *testing.T) {
+	r := cacheRegistry()
+	_ = NewServer(r, op.AllowAll, nil) // populate the per-entry cache
+	allocs := testing.AllocsPerRun(20, func() { _ = NewServer(r, op.AllowAll, nil) })
+	const maxAllocs = 500
+	if allocs > maxAllocs {
+		t.Fatalf("NewServer allocations = %.0f, want <= %d; per-server schema cloning likely returned", allocs, maxAllocs)
 	}
 }
 
