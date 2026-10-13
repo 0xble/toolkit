@@ -17,8 +17,10 @@ import (
 	"maps"
 	"net/http"
 
+	"github.com/google/jsonschema-go/jsonschema"
 	sdk "github.com/modelcontextprotocol/go-sdk/mcp"
 
+	"github.com/0xble/toolkit/internal/schemacache"
 	"github.com/0xble/toolkit/op"
 )
 
@@ -30,9 +32,10 @@ type Options struct {
 	Authorizer op.Authorizer
 }
 
-// NewServer returns an MCP server with one tool per MCP operation. httpReq is
-// the inbound HTTP request for authorizers, or nil for local transports. A
-// nil auth means op.DenyWrites.
+// NewServer returns an MCP server with one fresh tool per MCP operation.
+// Only the immutable schema copies are shared between servers. httpReq is the
+// inbound HTTP request for authorizers, or nil for local transports. A nil
+// auth means op.DenyWrites.
 func NewServer(reg *op.Registry, auth op.Authorizer, httpReq *http.Request) *sdk.Server {
 	if auth == nil {
 		auth = op.DenyWrites
@@ -42,13 +45,16 @@ func NewServer(reg *op.Registry, auth op.Authorizer, httpReq *http.Request) *sdk
 		if !e.MCP {
 			continue
 		}
-		s.AddTool(Tool(e), func(ctx context.Context, req *sdk.CallToolRequest) (*sdk.CallToolResult, error) {
+		schemas := schemacache.Get(e)
+		tool := toolFromSchemas(e, schemas.Input, schemas.Output)
+		structured := schemas.Output.Type == "object"
+		s.AddTool(tool, func(ctx context.Context, req *sdk.CallToolRequest) (*sdk.CallToolResult, error) {
 			r := op.Request{Surface: op.SurfaceMCP, HTTP: httpReq, Meta: maps.Clone(req.Params.Meta)}
 			out, err := e.CallJSON(ctx, r, req.Params.Arguments, auth)
 			if err != nil {
 				return errorResult(err), nil
 			}
-			return result(e, out)
+			return result(structured, out)
 		})
 	}
 	return s
@@ -68,18 +74,22 @@ const MetaCLIConfirmed = "toolkit/cli_confirmed"
 // including an op.Op whose Out is any or json.RawMessage, has no output
 // schema, and its result is the JSON text alone, without structured content.
 func Tool(e *op.Entry) *sdk.Tool {
+	return toolFromSchemas(e, e.InputSchema(), e.OutputSchema())
+}
+
+func toolFromSchemas(e *op.Entry, input, output *jsonschema.Schema) *sdk.Tool {
 	destructive := e.Effect == op.Destructive
 	t := &sdk.Tool{
 		Name:        e.MCPName(),
 		Description: e.Summary,
-		InputSchema: e.InputSchema(),
+		InputSchema: input,
 		Annotations: &sdk.ToolAnnotations{
 			ReadOnlyHint:    e.Effect == op.Read,
 			DestructiveHint: &destructive,
 		},
 	}
-	if out := e.OutputSchema(); out.Type == "object" {
-		t.OutputSchema = out
+	if output.Type == "object" {
+		t.OutputSchema = output
 	}
 	if e.CLIImmediate {
 		t.Meta = sdk.Meta{MetaCLIImmediate: true}
@@ -90,14 +100,14 @@ func Tool(e *op.Entry) *sdk.Tool {
 	return t
 }
 
-func result(e *op.Entry, out any) (*sdk.CallToolResult, error) {
+func result(structured bool, out any) (*sdk.CallToolResult, error) {
 	b, err := json.Marshal(out)
 	if err != nil {
 		return errorResult(op.Errorf(op.KindError, "encode_failed", "encode output: %v", err)), nil
 	}
 	r := &sdk.CallToolResult{Content: []sdk.Content{&sdk.TextContent{Text: string(b)}}}
 	// A nil map encodes as null, which is not structured content.
-	if e.OutputSchema().Type == "object" && len(b) > 0 && b[0] == '{' {
+	if structured && len(b) > 0 && b[0] == '{' {
 		r.StructuredContent = json.RawMessage(b)
 	}
 	return r, nil

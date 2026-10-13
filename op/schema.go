@@ -433,13 +433,65 @@ func exactNumbers(v any) (any, bool) {
 }
 
 func cloneSchema(s *jsonschema.Schema) *jsonschema.Schema {
-	b, err := json.Marshal(s)
-	if err != nil {
-		panic(err)
+	if s == nil {
+		return nil
 	}
-	var c jsonschema.Schema
-	if err := json.Unmarshal(b, &c); err != nil {
-		panic(err)
+	return deepCopy(reflect.ValueOf(s)).Interface().(*jsonschema.Schema)
+}
+
+// deepCopy recursively copies the reference-shaped parts of a value. Schema
+// contains fields that jsonschema-go intentionally leaves shallow in
+// CloneSchemas, including JSON values in Enum and Extra, so the copy must walk
+// every field rather than only sub-schemas. The schema values passed here have
+// no pointer cycles, as JSON marshaling them would not be valid either.
+func deepCopy(v reflect.Value) reflect.Value {
+	if !v.IsValid() {
+		return v
 	}
-	return &c
+	switch v.Kind() {
+	case reflect.Interface:
+		if v.IsNil() {
+			return reflect.Zero(v.Type())
+		}
+		out := reflect.New(v.Type()).Elem()
+		out.Set(deepCopy(v.Elem()))
+		return out
+	case reflect.Pointer:
+		if v.IsNil() {
+			return reflect.Zero(v.Type())
+		}
+		out := reflect.New(v.Type().Elem())
+		out.Elem().Set(deepCopy(v.Elem()))
+		return out
+	case reflect.Slice:
+		if v.IsNil() {
+			return reflect.Zero(v.Type())
+		}
+		out := reflect.MakeSlice(v.Type(), v.Len(), v.Len())
+		for i := range v.Len() {
+			out.Index(i).Set(deepCopy(v.Index(i)))
+		}
+		return out
+	case reflect.Map:
+		if v.IsNil() {
+			return reflect.Zero(v.Type())
+		}
+		out := reflect.MakeMapWithSize(v.Type(), v.Len())
+		iter := v.MapRange()
+		for iter.Next() {
+			out.SetMapIndex(deepCopy(iter.Key()), deepCopy(iter.Value()))
+		}
+		return out
+	case reflect.Struct:
+		out := reflect.New(v.Type()).Elem()
+		out.Set(v)
+		for i := range v.NumField() {
+			if out.Field(i).CanSet() && v.Field(i).CanInterface() {
+				out.Field(i).Set(deepCopy(v.Field(i)))
+			}
+		}
+		return out
+	default:
+		return v
+	}
 }

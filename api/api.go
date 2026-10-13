@@ -14,6 +14,7 @@ package api
 import (
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"net/http"
 	"strconv"
@@ -31,6 +32,16 @@ type Options struct {
 	Authorizer op.Authorizer
 }
 
+// currentJSON encodes the document from the registry's current entries. Each
+// entry's schema JSON is cached, so this marshals metadata, not schemas.
+func currentJSON(reg *op.Registry) []byte {
+	b, err := json.Marshal(buildOpenAPI(reg, true))
+	if err != nil {
+		panic(fmt.Sprintf("encode OpenAPI document: %v", err))
+	}
+	return b
+}
+
 // Handler returns the HTTP handler for reg. Mount MCP at /mcp next to it if
 // the tool serves MCP over HTTP.
 func Handler(reg *op.Registry, opts Options) http.Handler {
@@ -38,13 +49,14 @@ func Handler(reg *op.Registry, opts Options) http.Handler {
 	if auth == nil {
 		auth = op.DenyWrites
 	}
-	doc := OpenAPI(reg)
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /ops", func(w http.ResponseWriter, _ *http.Request) {
 		writeJSON(w, http.StatusOK, reg.Metadata())
 	})
+	// The document is built on request from current registry metadata. Schema
+	// copies are cached per entry, but mutable operation metadata is fresh.
 	mux.HandleFunc("GET /openapi.json", func(w http.ResponseWriter, _ *http.Request) {
-		writeJSON(w, http.StatusOK, doc)
+		writeJSONBytes(w, http.StatusOK, currentJSON(reg))
 	})
 	mux.HandleFunc("POST /ops/{name}", func(w http.ResponseWriter, r *http.Request) {
 		e := reg.Lookup(r.PathValue("name"))
@@ -98,7 +110,12 @@ func writeJSON(w http.ResponseWriter, status int, v any) {
 		status = http.StatusInternalServerError
 		b, _ = json.Marshal(ErrorBody{Error: op.Errorf(op.KindError, "encode_failed", "encode response: %v", err)})
 	}
+	writeJSONBytes(w, status, b)
+}
+
+func writeJSONBytes(w http.ResponseWriter, status int, b []byte) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(status)
-	_, _ = w.Write(append(b, '\n'))
+	_, _ = w.Write(b)
+	_, _ = w.Write([]byte{'\n'})
 }
