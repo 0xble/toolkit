@@ -1,5 +1,10 @@
 name: Nightly guard
 description: Skip a scheduled nightly when the default branch has not changed, with a weekly floor.
+inputs:
+  github-token:
+    description: Token for the read-only Actions API calls. The default job token needs `actions: read`.
+    required: false
+    default: ${{ github.token }}
 outputs:
   run-nightly:
     description: Whether the expensive nightly should run.
@@ -9,4 +14,8 @@ runs:
   steps:
     - id: guard
       shell: bash
+      # gh does not read the job token on its own; without GH_TOKEN every API
+      # call fails and the guard would fail open on every scheduled run.
+      env:
+        GH_TOKEN: ${{ inputs.github-token }}
       run: "$GITHUB_ACTION_PATH/nightly-guard.sh"
