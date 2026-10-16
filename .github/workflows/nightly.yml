@@ -4,6 +4,7 @@ on:
     - cron: "17 9 * * *"
   workflow_dispatch:
 permissions:
+  actions: read
   contents: read
 concurrency:
   group: nightly-${{ github.ref }}

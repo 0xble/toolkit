@@ -46,11 +46,24 @@ on:
         default: v1.7.0
 
 permissions:
+  actions: read
   contents: read
 
 jobs:
+  nightly_guard:
+    name: nightly guard
+    runs-on: ubuntu-slim
+    timeout-minutes: 2
+    outputs:
+      run-nightly: ${{ steps.guard.outputs.run-nightly }}
+    steps:
+      - id: guard
+        uses: ./.github/actions/nightly-guard
+
   nightly:
     name: nightly
+    needs: [nightly_guard]
+    if: needs.nightly_guard.outputs.run-nightly == 'true'
     runs-on: ${{ inputs.runner || vars.CI_NIGHTLY_RUNNER || vars.CI_RUNNER || 'ubuntu-24.04' }}
     timeout-minutes: 45
     steps:

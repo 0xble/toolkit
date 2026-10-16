@@ -3,6 +3,13 @@
 Released versions are described in their
 [GitHub releases](https://github.com/0xble/toolkit/releases).
 
+## Next release
+
+- Add a fail-open nightly guard for scheduled tool workflows. It skips the
+  expensive lane only when the latest successful scheduled run covers the
+  current default-branch SHA and is less than seven days old; manual dispatches
+  always run and the weekly floor preserves drift coverage.
+
 ## v0.1.14
 
 - Add the `sendguard` package for process-safe outbound duplicate-send claims.

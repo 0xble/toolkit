@@ -1,0 +1,12 @@
+name: Nightly guard
+description: Skip a scheduled nightly when the default branch has not changed, with a weekly floor.
+outputs:
+  run-nightly:
+    description: Whether the expensive nightly should run.
+    value: ${{ steps.guard.outputs.run-nightly }}
+runs:
+  using: composite
+  steps:
+    - id: guard
+      shell: bash
+      run: "$GITHUB_ACTION_PATH/nightly-guard.sh"

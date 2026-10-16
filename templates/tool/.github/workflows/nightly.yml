@@ -5,10 +5,11 @@ on:
     - cron: "17 9 * * *"
   workflow_dispatch:
 permissions:
+  actions: read
   contents: read
 concurrency:
   group: nightly-${{ github.ref }}
   cancel-in-progress: false
 jobs:
   nightly:
-    uses: 0xble/toolkit/.github/workflows/tool-nightly.yml@v0.1.1
+    uses: 0xble/toolkit/.github/workflows/tool-nightly.yml@v0.1.16
