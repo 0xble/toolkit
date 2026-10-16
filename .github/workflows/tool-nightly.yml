@@ -46,11 +46,29 @@ on:
         default: v1.7.0
 
 permissions:
+  actions: read
   contents: read
 
 jobs:
+  nightly_guard:
+    name: nightly guard
+    runs-on: ubuntu-slim
+    timeout-minutes: 2
+    outputs:
+      run-nightly: ${{ steps.guard.outputs.run-nightly }}
+    steps:
+      # A reusable workflow runs in the caller's workspace, so a `./` action
+      # path would resolve inside the caller repository. Reference the action
+      # by repository and the same release tag the callers pin.
+      - id: guard
+        uses: 0xble/toolkit/.github/actions/nightly-guard@v0.1.16
+
   nightly:
     name: nightly
+    needs: [nightly_guard]
+    # Fail open: run unless the guard positively decided to skip. A failed or
+    # missing guard result still runs the nightly.
+    if: ${{ !cancelled() && needs.nightly_guard.outputs.run-nightly != 'false' }}
     runs-on: ${{ inputs.runner || vars.CI_NIGHTLY_RUNNER || vars.CI_RUNNER || 'ubuntu-24.04' }}
     timeout-minutes: 45
     steps:
