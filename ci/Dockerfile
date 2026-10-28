@@ -1,6 +1,6 @@
 # Execution image for ./bin/ci. The gate builds it from the PR base's reviewed
 # ci/, never from the candidate.
-FROM golang:1.27.1-bookworm@sha256:69a7b9788769bec032d238959b61854e9ae87f57be9029ec04e9885fabf99195
+FROM golang:1.27.3-bookworm@sha256:05237276236793ebedaf0b87dab86add9ec9adc66ebef2dbc3107c18254cde1c
 ENV GOTOOLCHAIN=local GOPATH=/opt/go GOBIN=/usr/local/bin
 RUN apt-get update \
     && apt-get install -y --no-install-recommends jq=1.6-2.1+deb12u3 \
