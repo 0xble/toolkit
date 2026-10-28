@@ -2,6 +2,9 @@
 # ci/, never from the candidate.
 FROM golang:1.27.1-bookworm@sha256:69a7b9788769bec032d238959b61854e9ae87f57be9029ec04e9885fabf99195
 ENV GOTOOLCHAIN=local GOPATH=/opt/go GOBIN=/usr/local/bin
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends jq=1.6-2.1+deb12u3 \
+    && rm -rf /var/lib/apt/lists/*
 COPY govulncheck-version /tmp/govulncheck-version
 RUN vuln_version="$(tr -d '[:space:]' </tmp/govulncheck-version)" \
     && go install github.com/golangci/golangci-lint/v2/cmd/golangci-lint@v2.13.2 \
