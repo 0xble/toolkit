@@ -7,7 +7,7 @@ RUN apt-get update \
     && rm -rf /var/lib/apt/lists/*
 COPY govulncheck-version /tmp/govulncheck-version
 RUN vuln_version="$(tr -d '[:space:]' </tmp/govulncheck-version)" \
-    && go install github.com/golangci/golangci-lint/v2/cmd/golangci-lint@v2.13.2 \
+    && go install github.com/golangci/golangci-lint/v2/cmd/golangci-lint@v2.15.0 \
     && go install "golang.org/x/vuln/cmd/govulncheck@$vuln_version" \
     && rm -rf /opt/go /root/.cache /tmp/govulncheck-version \
     && useradd --uid 1000 --create-home ci
