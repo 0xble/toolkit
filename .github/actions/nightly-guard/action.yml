@@ -2,7 +2,7 @@ name: Nightly guard
 description: Skip a scheduled nightly when the default branch has not changed, with a weekly floor.
 inputs:
   github-token:
-    description: Token for the read-only Actions API calls. The default job token needs `actions: read`.
+    description: "Token for the read-only Actions API calls. The default job token needs `actions: read`."
     required: false
     default: ${{ github.token }}
 outputs:

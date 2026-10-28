@@ -61,7 +61,7 @@ jobs:
       # path would resolve inside the caller repository. Reference the action
       # by repository and the same release tag the callers pin.
       - id: guard
-        uses: 0xble/toolkit/.github/actions/nightly-guard@v0.1.17
+        uses: 0xble/toolkit/.github/actions/nightly-guard@v0.1.18
 
   nightly:
     name: nightly

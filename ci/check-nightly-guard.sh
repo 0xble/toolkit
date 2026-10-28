@@ -20,6 +20,14 @@ grep -q "needs.nightly_guard.outputs.run-nightly != 'false'" "$wf" || {
   exit 1
 }
 
+# Callers load action.yml from the release tag, so a manifest YAML error only
+# surfaces in their nightlies. Reject unquoted plain scalars containing ": ",
+# which YAML reads as a nested mapping.
+if grep -nE '^[[:space:]]*[A-Za-z_-]+: [^"'"'"'|>{[&*!#[:space:]][^#]*: ' .github/actions/nightly-guard/action.yml; then
+  echo "check-nightly-guard: action.yml has an unquoted value containing ': '; quote it" >&2
+  exit 1
+fi
+
 # gh needs an explicit token inside a composite step, or every guard call fails open.
 grep -q 'GH_TOKEN: ${{ inputs.github-token }}' .github/actions/nightly-guard/action.yml || {
   echo "check-nightly-guard: action.yml must pass GH_TOKEN to the guard step" >&2
