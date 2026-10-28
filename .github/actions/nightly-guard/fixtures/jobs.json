@@ -1,0 +1,127 @@
+{
+  "jobs": [
+    {
+      "completed_at": "2026-10-27T15:48:54Z",
+      "conclusion": "success",
+      "name": "source",
+      "started_at": "2026-10-27T15:39:52Z",
+      "status": "completed",
+      "steps": [
+        {
+          "completed_at": "2026-10-27T15:39:53Z",
+          "conclusion": "success",
+          "name": "Set up job",
+          "number": 1,
+          "started_at": "2026-10-27T15:39:52Z",
+          "status": "completed"
+        },
+        {
+          "completed_at": "2026-10-27T15:39:53Z",
+          "conclusion": "success",
+          "name": "Set up runner",
+          "number": 2,
+          "started_at": "2026-10-27T15:39:53Z",
+          "status": "completed"
+        },
+        {
+          "completed_at": "2026-10-27T15:39:56Z",
+          "conclusion": "success",
+          "name": "Run actions/checkout@11d5960a326750d5838078e36cf38b85af677262",
+          "number": 3,
+          "started_at": "2026-10-27T15:39:53Z",
+          "status": "completed"
+        },
+        {
+          "completed_at": "2026-10-27T15:39:56Z",
+          "conclusion": "success",
+          "name": "Confirm the exact scheduled checkout",
+          "number": 4,
+          "started_at": "2026-10-27T15:39:56Z",
+          "status": "completed"
+        },
+        {
+          "completed_at": "2026-10-27T15:40:10Z",
+          "conclusion": "success",
+          "name": "Build the reviewed execution image",
+          "number": 5,
+          "started_at": "2026-10-27T15:39:56Z",
+          "status": "completed"
+        },
+        {
+          "completed_at": "2026-10-27T15:48:51Z",
+          "conclusion": "success",
+          "name": "Run ./bin/ci nightly on the exact SHA",
+          "number": 6,
+          "started_at": "2026-10-27T15:40:10Z",
+          "status": "completed"
+        },
+        {
+          "completed_at": "2026-10-27T15:48:52Z",
+          "conclusion": "success",
+          "name": "Confirm the candidate stayed unchanged",
+          "number": 7,
+          "started_at": "2026-10-27T15:48:51Z",
+          "status": "completed"
+        },
+        {
+          "completed_at": "2026-10-27T15:48:52Z",
+          "conclusion": "success",
+          "name": "Remove the job's image tag",
+          "number": 8,
+          "started_at": "2026-10-27T15:48:52Z",
+          "status": "completed"
+        },
+        {
+          "completed_at": "2026-10-27T15:48:52Z",
+          "conclusion": "success",
+          "name": "Post Run actions/checkout@11d5960a326750d5838078e36cf38b85af677262",
+          "number": 16,
+          "started_at": "2026-10-27T15:48:52Z",
+          "status": "completed"
+        },
+        {
+          "completed_at": "2026-10-27T15:48:52Z",
+          "conclusion": "success",
+          "name": "Complete job",
+          "number": 17,
+          "started_at": "2026-10-27T15:48:52Z",
+          "status": "completed"
+        }
+      ]
+    },
+    {
+      "completed_at": "2026-10-27T15:49:16Z",
+      "conclusion": "success",
+      "name": "qualification",
+      "started_at": "2026-10-27T15:49:11Z",
+      "status": "completed",
+      "steps": [
+        {
+          "completed_at": "2026-10-27T15:49:13Z",
+          "conclusion": "success",
+          "name": "Set up job",
+          "number": 1,
+          "started_at": "2026-10-27T15:49:12Z",
+          "status": "completed"
+        },
+        {
+          "completed_at": "2026-10-27T15:49:13Z",
+          "conclusion": "success",
+          "name": "Aggregate blocking lane results",
+          "number": 2,
+          "started_at": "2026-10-27T15:49:13Z",
+          "status": "completed"
+        },
+        {
+          "completed_at": "2026-10-27T15:49:13Z",
+          "conclusion": "success",
+          "name": "Complete job",
+          "number": 3,
+          "started_at": "2026-10-27T15:49:13Z",
+          "status": "completed"
+        }
+      ]
+    }
+  ],
+  "total_count": 2
+}

@@ -14,21 +14,21 @@ set_output() {
 }
 
 # Pure decision function used by the unit tests and the API-backed path.
-# Arguments: current_sha default_sha last_success_sha completion_epoch now_epoch
+# Arguments: current_sha default_sha last_success_sha execution_epoch now_epoch
 nightly_guard_decision() {
   local current_sha=${1:-}
   local default_sha=${2:-}
   local last_success_sha=${3:-}
-  local completion_epoch=${4:-}
+  local execution_epoch=${4:-}
   local now_epoch=${5:-}
   if [[ "$current_sha" =~ ^[0-9a-f]{40}$ &&
         "$default_sha" =~ ^[0-9a-f]{40}$ &&
         "$last_success_sha" =~ ^[0-9a-f]{40}$ &&
-        "$completion_epoch" =~ ^[0-9]+$ &&
+        "$execution_epoch" =~ ^[0-9]+$ &&
         "$now_epoch" =~ ^[0-9]+$ &&
         "$current_sha" == "$default_sha" &&
         "$last_success_sha" == "$current_sha" ]]; then
-    local age=$((now_epoch - completion_epoch))
+    local age=$((now_epoch - execution_epoch))
     if (( age >= 0 && age < WEEKLY_FLOOR_SECONDS )); then
       printf 'skip\n'
       return 0
@@ -96,16 +96,24 @@ if ! runs_json=$(gh api --method GET "repos/$repo/actions/workflows/$workflow_fi
   fail_open 'scheduled run lookup failed'
 fi
 
-if ! last_run=$(printf '%s' "$runs_json" | jq -e --arg branch "$default_branch" '
-  [.workflow_runs[]? |
-    select(.status == "completed" and .conclusion == "success" and .event == "schedule" and
-           (.head_branch == $branch or .head_branch == null))]
-  | if length == 0 then {} else max_by(.completed_at // "") end
+# Runs have run_started_at and updated_at, not completed_at. Start time is
+# conservative: metadata updates and reruns must not postpone the weekly floor.
+if ! runs=$(printf '%s' "$runs_json" | jq -er --arg branch "$default_branch" '
+  if (.workflow_runs | type) != "array" then error("missing runs") else . end |
+  .workflow_runs |
+  if all(.[];
+    .status == "completed" and .conclusion == "success" and .event == "schedule" and
+    .head_branch == $branch and
+    (.id | type == "number" and . > 0 and . == floor) and
+    (.run_attempt | type == "number" and . > 0 and . == floor) and
+    (.head_sha | type == "string" and test("^[0-9a-f]{40}$")) and
+    (.run_started_at | type == "string" and test("^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$")))
+  then sort_by(.run_started_at) | reverse[] |
+    [.id, .run_attempt, .head_sha, .run_started_at] | @tsv
+  else error("unknown run shape") end
 ' 2>/dev/null); then
-  fail_open 'scheduled run response was not valid JSON'
+  fail_open 'no known successful scheduled run response'
 fi
-last_success_sha=$(printf '%s' "$last_run" | jq -r '.head_sha // empty' 2>/dev/null) || fail_open 'scheduled run SHA missing'
-last_completed=$(printf '%s' "$last_run" | jq -r '.completed_at // empty' 2>/dev/null) || fail_open 'scheduled completion missing'
 
 # GNU date is present on GitHub's Ubuntu runners; the BSD fallback keeps the
 # pure script testable on macOS developer machines.
@@ -116,18 +124,61 @@ to_epoch() {
   fi
   date -u -j -f '%Y-%m-%dT%H:%M:%SZ' "$timestamp" +%s 2>/dev/null
 }
-[ -n "$last_success_sha" ] || fail_open 'no successful scheduled run exists'
-[ -n "$last_completed" ] || fail_open 'successful run has no completion time'
-completion_epoch=$(to_epoch "$last_completed") || fail_open 'completion time was not parseable'
 now_epoch=$(date -u +%s) || fail_open 'current time was not readable'
+[[ "$now_epoch" =~ ^[0-9]+$ ]] || fail_open 'current time was not numeric'
+last_success_sha=
+execution_epoch=
+while IFS=$'\t' read -r run_id run_attempt run_sha run_started; do
+  run_epoch=$(to_epoch "$run_started") || fail_open 'run start time was not parseable'
+  [[ "$run_epoch" =~ ^[0-9]+$ ]] || fail_open 'run start time was not numeric'
+  (( now_epoch >= run_epoch )) || fail_open 'run start time is in the future'
+  # All remaining runs are older. None can satisfy the weekly floor.
+  (( now_epoch - run_epoch < WEEKLY_FLOOR_SECONDS )) || break
+  # Inspect the exact successful attempt, not a later attempt of the same run.
+  if ! jobs_json=$(gh api --method GET "repos/$repo/actions/runs/$run_id/attempts/$run_attempt/jobs" \
+      -f 'per_page=100' 2>/dev/null); then
+    fail_open 'scheduled run jobs lookup failed'
+  fi
+  if ! execution=$(printf '%s' "$jobs_json" | jq -er '
+    def lane: .name | test("(^| / )(source|nightly)$");
+    def full_step: .name == "Run ./bin/ci nightly on the exact SHA" or
+      .name == "Run ./bin/ci nightly on the exact SHA in the image";
+    if (.jobs | type) != "array" or .total_count != (.jobs | length) or
+      (.jobs | length) == 0 then error("incomplete jobs") else . end |
+    if all(.jobs[];
+      (.name | type == "string") and .status == "completed" and
+      (.conclusion == "success" or .conclusion == "skipped") and
+      (.steps | type == "array") and
+      all(.steps[]; (.name | type == "string") and .status == "completed" and
+        (.conclusion == "success" or .conclusion == "skipped")))
+    then . else error("unknown job shape") end |
+    [.jobs[] | select(lane)] as $lanes |
+    if ($lanes | length) == 0 then error("no known nightly lane")
+    elif all($lanes[]; .conclusion == "success" and
+      any(.steps[]; full_step and .status == "completed" and .conclusion == "success"))
+    then "executed"
+    elif all($lanes[]; .conclusion == "skipped") and
+      any(.jobs[]; (.name | test("(^| / )nightly guard$")) and .conclusion == "success")
+    then "noop"
+    else error("unknown execution evidence") end
+  ' 2>/dev/null); then
+    fail_open 'scheduled run execution evidence is unknown or incomplete'
+  fi
+  if [ "$execution" = executed ]; then
+    last_success_sha=$run_sha
+    execution_epoch=$run_epoch
+    break
+  fi
+  printf 'ignoring intentional no-op scheduled run %s for weekly floor\n' "$run_id"
+done <<<"$runs"
 
 result=$(nightly_guard_decision "$current_sha" "$default_sha" "$last_success_sha" \
-  "$completion_epoch" "$now_epoch")
+  "$execution_epoch" "$now_epoch")
 if [ "$result" = skip ]; then
-  printf 'scheduled nightly skipped: successful run %s already covers default-branch SHA %s and is less than seven days old\n' \
-    "$last_success_sha" "$current_sha"
+  printf 'scheduled nightly skipped: executed run %s covers default-branch SHA %s and is less than seven days old\n' \
+    "$run_id" "$current_sha"
   set_output false
 else
-  printf 'scheduled nightly running: no recent successful run covers default-branch SHA %s\n' "$current_sha"
+  printf 'scheduled nightly running: no recent executed successful run covers default-branch SHA %s\n' "$current_sha"
   set_output true
 fi
